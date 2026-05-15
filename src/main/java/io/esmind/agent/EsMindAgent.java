@@ -1,10 +1,7 @@
 package io.esmind.agent;
 
-import static io.agentscope.examples.harness.common.util.ExampleUtils.ctx;
-import static io.agentscope.examples.harness.common.util.ExampleUtils.runHarnessTurn;
-import static io.agentscope.examples.harness.common.util.ExampleUtils.startHarnessChat;
-
 import io.agentscope.core.agent.RuntimeContext;
+import io.agentscope.core.message.Msg;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.Toolkit;
@@ -13,23 +10,32 @@ import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Scanner;
 import java.util.UUID;
 
 /**
  * ESMind — Natural Language to Elasticsearch Query Agent.
  *
- * <p>This is the main entry point. It builds a HarnessAgent with:
+ * <p>Main entry point that builds a {@link HarnessAgent} with:
  *
  * <ul>
- *   <li>A workspace-driven persona (AGENTS.md in the workspace)</li>
- *   <li>Session persistence (same sessionId resumes previous state)</li>
- *   <li>Conversation compaction with memory flush for long histories</li>
- *   <li>A custom {@link EsTool} for interacting with Elasticsearch</li>
- *   <li>Skills auto-loaded from workspace/skills/</li>
- *   <li>Subagent orchestration from workspace/subagents/</li>
+ *   <li>Workspace-driven persona from {@code AGENTS.md}
+ *   <li>Session persistence (same sessionId resumes previous state)
+ *   <li>Conversation compaction with memory flush
+ *   <li>Custom {@link EsTool} for Elasticsearch interaction
+ *   <li>Skills auto-loaded from workspace/skills/
+ *   <li>Subagent orchestration from workspace/subagents/
  * </ul>
  *
- * <h2>Usage</h2>
+ * <h2>Prerequisites</h2>
+ *
+ * <ol>
+ *   <li>JDK 17+, Maven 3.8+
+ *   <li>Set environment variable {@code DASHSCOPE_API_KEY} (or {@code OPENAI_API_KEY})
+ *   <li>Accessible Elasticsearch instance (7.x+)
+ * </ol>
+ *
+ * <h2>Run</h2>
  *
  * <pre>
  * # Interactive mode
@@ -37,8 +43,8 @@ import java.util.UUID;
  * mvn compile exec:java -Dexec.mainClass="io.esmind.agent.EsMindAgent"
  *
  * # Single query
- * mvn compile exec:java \
- *   -Dexec.mainClass="io.esmind.agent.EsMindAgent" \
+ * mvn compile exec:java \\
+ *   -Dexec.mainClass="io.esmind.agent.EsMindAgent" \\
  *   -Dexec.args="上个月销量最高的产品是什么？"
  * </pre>
  */
@@ -74,7 +80,7 @@ public class EsMindAgent {
     private static final int DEFAULT_ES_PORT = 9200;
     private static final String DEFAULT_ES_SCHEME = "http";
 
-    private static final String DEFAULT_SHARED_SESSION_ID = "esmind-shared-default";
+    private static final String DEFAULT_SESSION_ID = "esmind-default";
     private static final String NEW_SESSION_FLAG = "--new-session";
 
     // -------------------------------------------------------------------------
@@ -84,14 +90,14 @@ public class EsMindAgent {
     public static void main(String[] args) throws IOException {
         printBanner();
 
-        // 1. Resolve configuration
+        // 1. Resolve configuration from environment
         String apiKey = requireEnv(ENV_API_KEY);
-        String modelName = env(ENV_MODEL_NAME, DEFAULT_MODEL);
-        Path workspace = Paths.get(env(ENV_WORKSPACE, DEFAULT_WORKSPACE));
+        String modelName = getEnv(ENV_MODEL_NAME, DEFAULT_MODEL);
+        Path workspace = Paths.get(getEnv(ENV_WORKSPACE, DEFAULT_WORKSPACE));
 
-        String esHost = env(ENV_ES_HOST, DEFAULT_ES_HOST);
-        int esPort = Integer.parseInt(env(ENV_ES_PORT, String.valueOf(DEFAULT_ES_PORT)));
-        String esScheme = env(ENV_ES_SCHEME, DEFAULT_ES_SCHEME);
+        String esHost = getEnv(ENV_ES_HOST, DEFAULT_ES_HOST);
+        int esPort = Integer.parseInt(getEnv(ENV_ES_PORT, String.valueOf(DEFAULT_ES_PORT)));
+        String esScheme = getEnv(ENV_ES_SCHEME, DEFAULT_ES_SCHEME);
         String esUsername = System.getenv(ENV_ES_USERNAME);
         String esPassword = System.getenv(ENV_ES_PASSWORD);
 
@@ -104,14 +110,14 @@ public class EsMindAgent {
         Model model = DashScopeChatModel.builder()
                 .apiKey(apiKey)
                 .modelName(modelName)
-                .stream(true)
+                .stream(false)
                 .build();
 
         // 4. Build the ES tool
         System.out.println("[3/4] Connecting to Elasticsearch: " + esHost + ":" + esPort);
         EsTool esTool = new EsTool(esHost, esPort, esScheme, esUsername, esPassword);
 
-        // 5. Build the agent
+        // 5. Build the HarnessAgent
         System.out.println("[4/4] Building ESMind HarnessAgent ...\n");
 
         Toolkit toolkit = new Toolkit();
@@ -138,14 +144,16 @@ public class EsMindAgent {
         ParsedArgs parsedArgs = parseArgs(args);
         String sessionId = parsedArgs.newSession()
                 ? "esmind-" + UUID.randomUUID().toString().substring(0, 8)
-                : DEFAULT_SHARED_SESSION_ID;
+                : DEFAULT_SESSION_ID;
 
         System.out.println("Session ID: " + sessionId);
-        RuntimeContext ctx = ctx(sessionId);
+        RuntimeContext ctx = RuntimeContext.builder()
+                .sessionId(sessionId)
+                .build();
 
         if (parsedArgs.question() != null) {
             // Single-shot mode
-            runHarnessTurn(agent, ctx, parsedArgs.question());
+            runSingleTurn(agent, parsedArgs.question(), ctx);
             esTool.close();
             return;
         }
@@ -153,10 +161,53 @@ public class EsMindAgent {
         // Interactive chat mode
         System.out.println("\n🔍 ESMind ready. Ask questions in natural language about your");
         System.out.println("Elasticsearch data. Same session retains context across turns.");
-        System.out.println("Type 'quit', 'exit', or 'q' to end. Empty line also exits.\n");
-        startHarnessChat(agent, ctx);
+        System.out.println("Type 'quit', 'exit', or 'q' to end.\n");
+        startInteractiveChat(agent, ctx);
 
         esTool.close();
+    }
+
+    // -------------------------------------------------------------------------
+    // Agent interaction helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Runs a single agent turn with the given question and prints the response.
+     */
+    private static void runSingleTurn(HarnessAgent agent, String question, RuntimeContext ctx) {
+        try {
+            System.out.println("\n> " + question + "\n");
+            Msg result = agent.call(Msg.userMsg(question), ctx).block();
+            if (result != null) {
+                String text = result.getTextContent();
+                if (text != null && !text.isBlank()) {
+                    System.out.println(text);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error during agent call: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Starts an interactive read-eval loop with the HarnessAgent.
+     */
+    private static void startInteractiveChat(HarnessAgent agent, RuntimeContext ctx) {
+        try (Scanner scanner = new Scanner(System.in)) {
+            while (true) {
+                System.out.print("> ");
+                if (!scanner.hasNextLine()) {
+                    break;
+                }
+                String question = scanner.nextLine().strip();
+                if (question.isEmpty() || "quit".equalsIgnoreCase(question)
+                        || "exit".equalsIgnoreCase(question) || "q".equalsIgnoreCase(question)) {
+                    break;
+                }
+                runSingleTurn(agent, question, ctx);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -164,12 +215,11 @@ public class EsMindAgent {
     // -------------------------------------------------------------------------
 
     private static void printBanner() {
-        System.out.println("""
-                ╔═══════════════════════════════════════════╗
-                ║    ESMind — NL → Elasticsearch Agent     ║
-                ║    Powered by AgentScope Java Harness     ║
-                ╚═══════════════════════════════════════════╝
-                """);
+        System.out.println("\n" +
+                "╔═══════════════════════════════════════════╗\n" +
+                "║    ESMind — NL → Elasticsearch Agent     ║\n" +
+                "║    Powered by AgentScope Java Harness     ║\n" +
+                "╚═══════════════════════════════════════════╝\n");
     }
 
     private static ParsedArgs parseArgs(String[] args) {
@@ -195,11 +245,12 @@ public class EsMindAgent {
             System.err.println("Required environment variable '" + name
                     + "' is not set.\nCopy .env.example → .env and fill in your values.");
             System.exit(1);
+            return null; // unreachable
         }
         return value;
     }
 
-    private static String env(String name, String defaultValue) {
+    private static String getEnv(String name, String defaultValue) {
         String value = System.getenv(name);
         return (value != null && !value.isBlank()) ? value : defaultValue;
     }
