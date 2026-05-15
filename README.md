@@ -19,13 +19,30 @@
 ES 查询结果 + NL 解释
 ```
 
+## 版本兼容性
+
+| ES 版本 | 支持状态 | 说明 |
+|---------|---------|------|
+| 5.x | ⚠️ 基本支持 | REST API 兼容，未充分测试 |
+| **6.x** | ✅ **完全支持** | mapping type 包裹、total hits 数字格式已适配 |
+| **7.x** | ✅ **完全支持** | 原生 REST API |
+| **8.x** | ✅ **完全支持** | REST API 兼容 |
+
+**实现方式**：使用 Elasticsearch Low-Level REST Client（`elasticsearch-rest-client`）直接发送 HTTP 请求，通过 Jackson 解析 JSON 响应。启动时自动检测 ES 版本号并差异化处理：
+
+- **Mapping 结构差异**：6.x 的 mapping 返回 `{"mappings": {"_doc": {"properties": {...}}}}`（type 包裹），7.x+ 返回 `{"mappings": {"properties": {...}}}`（扁平结构）——自动适配
+- **Total hits 格式差异**：6.x 返回纯数字 `{"total": 42}`，7.x+ 返回对象 `{"total": {"value": 42, "relation": "eq"}}`——自动识别
+- **索引列举**：统一使用 `_cat/indices?format=json`
+
+> 💡 底层不依赖 `RestHighLevelClient`，因此不存在 ES 客户端版本绑定问题。
+
 ## 快速开始
 
 ### 前置条件
 
 - JDK 17+
 - Maven 3.8+
-- 可访问的 Elasticsearch 实例（7.x+）
+- 可访问的 Elasticsearch 实例（**6.x ~ 8.x**，启动时自动检测版本）
 
 ### 配置
 
