@@ -6,10 +6,56 @@
 |------|-----|
 | 索引名 | `xnk20231220_clinical_inhistory_0122113057` |
 | ES 版本 | 6.x（mapping type: `typemr`） |
-| 结构 | 一个索引，每个文档对应一个患者，所有数据在嵌套对象中 |
+| 结构 | **每文档 = 一个就诊次**，而非每个患者一条记录。同一患者的多次就诊（门诊/住院）分布在多个文档中 |
 | dynamic | `strict`（只允许 mapping 中定义的字段） |
 | 总嵌套对象数 | 189 |
 | 总字段数 | 224（35 个直属字段 + 189 个嵌套/对象字段） |
+
+## 数据模型（ADC 装载模块推导）
+
+此 ES 索引的数据来源于 **MongoDB 单一 Collection**，所有业务表用 `document_category` 字段区分。每个 ES 文档代表一次就诊，装载流程：
+
+```
+MongoDB（单一 Collection，document_category 区分表）
+  → batchRead 读取所有表 → synthesisVisit 按就诊聚合
+  → structure2 结构化（CaseModel） → MENew.processOne 组装 ES 文档
+  → 写入 ES 索引
+```
+
+### ES `_id` 格式
+
+```
+{4位hash}{hospital_code}##{visit_type}#{patient_id}#{visit_id}
+例: fe37BJDXDSYY##2#000930502000#1
+```
+
+其中 `visit_type`: 1=门诊, 2=住院, 3=急诊, 4=体检, 9=其他
+
+### `patient` 对象
+
+`patient` 对象由装载模块从多个表中取数据**动态合成**（不是从某个单一表直接拿的）：
+- `patient.id` = ES `_id`
+- `patient.patient_id` = 患者ID
+- `patient.visit_id` = 就诊次
+- `patient.hospital_code` = 医院编码
+- `patient.hospital_name` = 医院名称
+- `patient.doc_list` = **该就诊次有哪些表有数据**（动态生成，非空表才列入）
+- `patient.dept` = 科室信息（来自各表汇总）
+
+> 💡 `_source.includes = ["patient*"]` 意味着普通查询的 `_source` **只包含 patient 对象**，要获取嵌套业务表数据必须使用 `inner_hits` 或在 `_source` 中明确指定路径。
+
+### 数据分表
+
+MongoDB 中所有表在同一 Collection，通过 `document_category` 区分。两种数据形态：
+
+| document_category | 表中文 | 数据形态 | 示例字段 |
+|------------------|--------|---------|---------|
+| `binganshouye` | 病案首页 | **平铺** | `name`, `sex`, `admission_time` 在文档根下 |
+| `menzhenjiuzhenjilu` | 门诊就诊记录 | **平铺** | `name`, `visit_time`, `visit_dept_name` 在文档根下 |
+| `menzhenshuju` | 门诊病历数据 | **data_res 嵌套** | `data_res.pat_info`, `data_res.chief_complaint`, `data_res.diagnosis_name` |
+| `jianchabaogaofu` | 检查报告 | **data_res 嵌套** | `data_res` 可能为后结构化数据，也可能返回 errorcode=206 不支持 |
+
+平铺结构的表（病案首页、就诊记录）字段直接作为 Mongo 文档的根 key。有 NLP 后结构化处理的表（门诊病历、文书等）才有 `data_res`。
 
 ## 核心查询模式
 

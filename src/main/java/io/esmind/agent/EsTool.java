@@ -352,6 +352,14 @@ public class EsTool {
 
     /**
      * Recursively append mapping properties in a readable format.
+     *
+     * <p>Enhancements from ADC project analysis:
+     * <ul>
+     *   <li>{@code nested} type fields are marked with {@code [TABLE]} — these
+     *       correspond to business tables (病案首页, 检验明细, etc.)</li>
+     *   <li>{@code _source}-only fields (patients) are flagged</li>
+     *   <li>Multi-field (keyword) sub-fields are shown inline</li>
+     * </ul>
      */
     @SuppressWarnings("unchecked")
     private void appendProperties(StringBuilder sb, JsonNode props, String indent) {
@@ -362,14 +370,29 @@ public class EsTool {
             JsonNode fieldDef = entry.getValue();
 
             String type = fieldDef.has("type") ? fieldDef.get("type").asText() : "object";
-            sb.append(indent).append("- **").append(fieldName).append("** (`").append(type).append("`)");
+            sb.append(indent).append("- **").append(fieldName).append("** (`").append(type).append("`");
+
+            // Mark nested types as business tables
+            if ("nested".equals(type)) {
+                sb.append(") 💠 [TABLE]");
+            } else {
+                sb.append(")");
+            }
 
             if (fieldDef.has("fields")) {
-                sb.append(" (multi-field)");
+                // Show keyword/text sub-fields inline
+                JsonNode subFields = fieldDef.get("fields");
+                Iterator<String> subNames = subFields.fieldNames();
+                while (subNames.hasNext()) {
+                    String sub = subNames.next();
+                    JsonNode subDef = subFields.get(sub);
+                    String subType = subDef.has("type") ? subDef.get("type").asText() : "?";
+                    sb.append(" → .").append(sub).append(" (`").append(subType).append("`)");
+                }
             }
             sb.append("\n");
 
-            // Recurse into nested properties
+            // Recurse into nested properties (for nested tables, shows their fields)
             if (fieldDef.has("properties")) {
                 appendProperties(sb, fieldDef.get("properties"), indent + "    ");
             }
@@ -378,6 +401,10 @@ public class EsTool {
 
     /**
      * Format a search response JSON node into a human-readable string.
+     *
+     * <p>Renders both {@code _source} and {@code inner_hits} (critical for
+     * indices where {@code _source.includes = ["patient*"]} — nested table
+     * data is only available via inner_hits).
      */
     private String formatSearchResponse(JsonNode root, int maxHits) {
         JsonNode hits = root.get("hits");
@@ -408,16 +435,46 @@ public class EsTool {
                     .append(" | Index: ").append(index)
                     .append(" | ID: ").append(id).append("\n");
 
+            // --- _source (patient fields for neuro index) ---
             JsonNode source = hit.get("_source");
             if (source != null) {
+                sb.append("**patient:**\n");
                 sb.append("```json\n").append(toPretty(source)).append("\n```\n");
             } else {
-                // For field-only responses (no _source)
                 JsonNode fields = hit.get("fields");
                 if (fields != null) {
                     sb.append("```json\n").append(toPretty(fields)).append("\n```\n");
-                } else {
-                    sb.append("(no source fields — metadata-only result)\n");
+                }
+            }
+
+            // --- inner_hits (nested table data — critical for the neuro index) ---
+            JsonNode innerHits = hit.get("inner_hits");
+            if (innerHits != null && !innerHits.isEmpty()) {
+                sb.append("**inner_hits (nested table data):**\n");
+                Iterator<Map.Entry<String, JsonNode>> ihFields = innerHits.fields();
+                while (ihFields.hasNext()) {
+                    Map.Entry<String, JsonNode> ihEntry = ihFields.next();
+                    String ihName = ihEntry.getKey();
+                    JsonNode ihData = ihEntry.getValue();
+                    JsonNode ihHits = ihData.get("hits");
+                    if (ihHits == null) continue;
+                    long ihTotal = parseTotalHits(ihHits);
+                    JsonNode ihHitsArray = ihHits.get("hits");
+                    if (ihHitsArray == null || ihHitsArray.size() == 0) continue;
+
+                    sb.append("  · ").append(ihName).append(" (").append(ihTotal).append(" rows):\n");
+                    for (int j = 0; j < Math.min(ihHitsArray.size(), 5); j++) {
+                        JsonNode ihHit = ihHitsArray.get(j);
+                        JsonNode ihSource = ihHit.get("_source");
+                        if (ihSource != null) {
+                            sb.append("    ```json\n    ")
+                                    .append(toPretty(ihSource).replace("\n", "\n    "))
+                                    .append("\n    ```\n");
+                        }
+                    }
+                    if (ihTotal > 5) {
+                        sb.append("    ... (").append(ihTotal - 5).append(" more rows)\n");
+                    }
                 }
             }
             sb.append("\n");

@@ -21,13 +21,22 @@ Use query-debugging when:
 1. **Check the index exists** — `es_list_indices`
 2. **Check field names** — `es_get_mapping` to verify exact field paths
 3. **Check `.keyword`** — `text` fields need `.keyword` suffix for exact match
-4. **Check date ranges** — verify date format matches the mapping
-5. **Check case sensitivity** — `term` queries are case-sensitive
+4. **Check `nested` path** — business table fields MUST be queried via `nested` query:
+   - ❌ Wrong: `{"match": {"binganshouye.sex": "男性"}}`
+   - ✅ Correct: `{"nested": {"path": "binganshouye", "query": {"match": {"binganshouye.sex": "男性"}}}}`
+5. **Check date ranges** — verify date format matches the mapping
+6. **Check case sensitivity** — `term` queries are case-sensitive
+
+### Missing Nested Data (inner_hits)
+
+1. **No inner_hits in response** — you omitted `"inner_hits": {}` inside the nested query
+2. **Check `_source.includes`** — if `_source` only returns `patient`, nested data REQUIRES inner_hits
+3. **Check inner_hits size** — default inner_hits size may be 3, set `"inner_hits": {"size": 10}` for more
 
 ### Wrong Counts
 
 1. **Check aggregation field type** — must be `keyword`, not `text`
-2. **Check for nested documents** — need `nested` aggregation for nested fields
+2. **Check for nested documents** — use `nested` path in aggs for nested fields
 3. **Check for missing filters** — the query may be matching more than intended
 
 ### Parse Errors
