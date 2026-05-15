@@ -19,6 +19,7 @@ import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.Response;
 import org.elasticsearch.client.RestClient;
+import org.elasticsearch.client.RestClientBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -66,7 +67,7 @@ public class EsTool {
     public EsTool(String host, int port, String scheme, String username, String password) {
         HttpHost httpHost = new HttpHost(host, port, scheme);
 
-        RestClient.Builder builder = RestClient.builder(httpHost)
+        RestClientBuilder builder = RestClient.builder(httpHost)
                 .setRequestConfigCallback(cb -> cb
                         .setConnectTimeout(5_000)
                         .setSocketTimeout(30_000));
@@ -263,11 +264,10 @@ public class EsTool {
                     description = "Elasticsearch DSL query as a JSON object." +
                             " Example: {\\\"match\\\": {\\\"title\\\": \\\"elasticsearch\\\"}}")
             String query,
-            @ToolParam(name = "size", description = "Max results to return (default: 10)",
-                    defaultValue = "10")
-            int size) {
+            @ToolParam(name = "size", description = "Max results to return (default: 10)")
+            Integer size) {
         try {
-            int actualSize = Math.min(size, MAX_HITS);
+            int actualSize = Math.min(size != null ? size : 10, MAX_HITS);
 
             // Parse the user's query JSON
             JsonNode queryNode = parseJson(query);

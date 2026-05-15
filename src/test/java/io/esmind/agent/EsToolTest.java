@@ -32,7 +32,7 @@ public class EsToolTest {
                         io.agentscope.core.tool.Tool.class));
 
         Assertions.assertTrue(
-                EsTool.class.getMethod("executeQuery", String.class, String.class, int.class)
+                EsTool.class.getMethod("executeQuery", String.class, String.class, Integer.class)
                         .isAnnotationPresent(io.agentscope.core.tool.Tool.class));
     }
 

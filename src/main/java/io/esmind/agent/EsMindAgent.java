@@ -2,6 +2,7 @@ package io.esmind.agent;
 
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
+import io.agentscope.core.message.MsgRole;
 import io.agentscope.core.model.DashScopeChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.Toolkit;
@@ -177,7 +178,7 @@ public class EsMindAgent {
     private static void runSingleTurn(HarnessAgent agent, String question, RuntimeContext ctx) {
         try {
             System.out.println("\n> " + question + "\n");
-            Msg result = agent.call(Msg.userMsg(question), ctx).block();
+            Msg result = agent.call(Msg.builder().role(MsgRole.USER).textContent(question).build(), ctx).block();
             if (result != null) {
                 String text = result.getTextContent();
                 if (text != null && !text.isBlank()) {
