@@ -69,14 +69,17 @@ match → ruyuanjilu_src / shoucibingchengjilu_src = "现病史关键词"
 
 ### 神经科调取规范高频字段
 
-- 性别: `binganshouye.sex_name`
+- 性别: `binganshouye.sex`（注意不是 sex_name）
 - 年龄: `binganshouye.age`
 - 入院日期: `binganshouye.admission_time`
+- 确诊日期: `binganshouye.diagnosis_time`
 - 出院诊断: `shouyezhenduan.diagnosis_name`
 - ADL评分: `binganshouye.adl_1`（入院）/ `adl_2`（出院）
-- 呼吸机使用时间: `binganshouye.ventilator_use_hours`
-- 现病史: `ruyuanjilu` 或 `shoucibingchengjilu` 文本
-- 检验数据: `jianyanbaogaomingxi` 按细项名获取
+- 呼吸机使用时长: `binganshouye.ventilator_use_duration`
+- 现病史: `ruyuanjilu.history_of_present_illness`
+- 既往史: `ruyuanjilu.history_of_past_illness`
+- 家族史: `ruyuanjilu.family_member_diseases_history`
+- 检验数据: `jianyanbaogaomingxifu` 按 `lab_sub_item_name` 获取
 
 ## 工作流程
 
