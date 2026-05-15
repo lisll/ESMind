@@ -13,6 +13,34 @@
 
 ## 核心查询模式
 
+### 0. 关键约束：`_source` 只返回 `patient`
+
+**⚠️ 重要：** ES mapping 中 `_source.includes = ["patient*"]`，所以普通查询的 `_source` **只包含 `patient` 对象**。其他嵌套对象（binganshouye, jianyanbaogaomingxifu 等）**已被索引但不返回**。
+
+要获取这些嵌套对象的数据，必须使用 **`inner_hits`**：
+
+```json
+{
+  "query": {
+    "nested": {
+      "path": "binganshouye",
+      "query": { "match": { "binganshouye.sex": "男性" } },
+      "inner_hits": {}
+    }
+  },
+  "_source": ["patient.id", "patient.patient_id"]
+}
+```
+
+或者在查询中直接用 `_source` 指定需要的嵌套路径：
+
+```json
+{
+  "_source": ["patient.id", "binganshouye.*"],
+  "query": { ... }
+}
+```
+
 ### 1. 所有嵌套对象都需要用 `nested` 查询
 
 ES 6.x 中，`nested` 类型字段必须用 `nested` 查询：

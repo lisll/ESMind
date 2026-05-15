@@ -12,6 +12,7 @@
 - `dynamic: strict` — 只允许 mapping 中定义的字段
 - 所有业务表都是 `nested` 类型，必须用 `nested` 查询
 - 患者通过 `patient.id` 或各嵌套对象的 `patient_id` + `visit_id` 关联
+- **`_source` 只返回 `patient`** — 获取其他嵌套对象数据必须用 `inner_hits`
 
 ## 行为约定
 
