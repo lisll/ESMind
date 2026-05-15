@@ -32,7 +32,7 @@ import java.util.UUID;
  * <ol>
  *   <li>JDK 17+, Maven 3.8+
  *   <li>Set environment variable {@code DASHSCOPE_API_KEY} (or {@code OPENAI_API_KEY})
- *   <li>Accessible Elasticsearch instance (7.x+)
+ *   <li>Accessible Elasticsearch instance (6.x+, auto-detects version)</li>
  * </ol>
  *
  * <h2>Run</h2>
