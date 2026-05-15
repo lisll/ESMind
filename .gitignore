@@ -1,0 +1,12 @@
+target/
+.agentscope/
+*.db
+*.sqlite
+.env
+.DS_Store
+*.log
+.idea/
+*.iml
+.settings/
+.project
+.classpath
