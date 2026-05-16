@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESMind — NL → Elasticsearch Agent</title>
-
-    <!-- marked.js for Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
     <style>
@@ -28,13 +26,10 @@
             --accent-glow: rgba(79, 142, 247, 0.15);
             --user-bg: #1e3a5f;
             --user-border: #2a5a8f;
+            --code-bg: #14171e;
             --success: #34d399;
-            --warning: #fbbf24;
-            --error: #f87171;
-            --code-bg: #1a1d27;
             --radius: 10px;
             --radius-sm: 6px;
-            --shadow: 0 2px 12px rgba(0,0,0,0.3);
             --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans SC", sans-serif;
             --font-mono: "SF Mono", "Fira Code", "Consolas", monospace;
         }
@@ -47,14 +42,11 @@
             overflow: hidden;
         }
 
-        /* ═══════════════════════════════════════════
-           Layout
-           ═══════════════════════════════════════════ */
         .app {
             display: flex;
             flex-direction: column;
             height: 100vh;
-            max-width: 900px;
+            max-width: 960px;
             margin: 0 auto;
             padding: 0 16px;
         }
@@ -64,470 +56,245 @@
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 16px 0;
+            padding: 14px 0;
             border-bottom: 1px solid var(--border);
             flex-shrink: 0;
         }
 
         .header-logo {
-            width: 36px;
-            height: 36px;
+            width: 34px; height: 34px;
             background: linear-gradient(135deg, var(--accent), #7c5cfc);
             border-radius: var(--radius-sm);
             display: flex;
             align-items: center;
             justify-content: center;
-            font-weight: 700;
-            font-size: 16px;
-            color: white;
+            font-weight: 700; font-size: 14px; color: white;
             flex-shrink: 0;
         }
 
-        .header-text h1 {
-            font-size: 18px;
-            font-weight: 600;
-            letter-spacing: -0.3px;
-        }
-
-        .header-text p {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 1px;
-        }
+        .header-text h1 { font-size: 16px; font-weight: 600; }
+        .header-text p { font-size: 11px; color: var(--text-secondary); margin-top: 1px; }
 
         .header-status {
             margin-left: auto;
             display: flex;
             align-items: center;
             gap: 6px;
-            font-size: 12px;
-            color: var(--text-muted);
+            font-size: 11px; color: var(--text-muted);
         }
-
         .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--success);
-            animation: pulse 2s infinite;
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--success); animation: pulse 2s infinite;
         }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        /* Chat Messages */
+        /* Messages */
         .messages {
-            flex: 1;
-            overflow-y: auto;
-            padding: 20px 0;
-            scroll-behavior: smooth;
+            flex: 1; overflow-y: auto; padding: 16px 0; scroll-behavior: smooth;
         }
-
-        .messages::-webkit-scrollbar {
-            width: 6px;
-        }
-        .messages::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        .messages::-webkit-scrollbar-thumb {
-            background: var(--border);
-            border-radius: 3px;
-        }
+        .messages::-webkit-scrollbar { width: 6px; }
+        .messages::-webkit-scrollbar-track { background: transparent; }
+        .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
         .messages:empty::after {
             content: "输入自然语言查询 Elasticsearch 数据";
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            color: var(--text-muted);
-            font-size: 15px;
-            opacity: 0.6;
+            display: flex; align-items: center; justify-content: center;
+            height: 100%; color: var(--text-muted); font-size: 14px; opacity: 0.5;
         }
 
-        /* Message Bubbles */
-        .message {
-            margin-bottom: 20px;
-            animation: fadeIn 0.3s ease;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(8px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
+        .message { margin-bottom: 20px; animation: fadeIn 0.3s ease; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
         .message-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 8px;
+            display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
         }
-
         .message-avatar {
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 13px;
-            font-weight: 600;
-            flex-shrink: 0;
+            width: 28px; height: 28px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 12px; font-weight: 600; flex-shrink: 0;
         }
+        .message-avatar.user { background: var(--accent); color: white; }
+        .message-avatar.agent { background: linear-gradient(135deg, #7c5cfc, #4f8ef7); color: white; }
+        .message-name { font-size: 12px; font-weight: 600; }
+        .message-time { font-size: 11px; color: var(--text-muted); margin-left: auto; }
 
-        .message-avatar.user {
-            background: var(--accent);
-            color: white;
-        }
-
-        .message-avatar.agent {
-            background: linear-gradient(135deg, #7c5cfc, #4f8ef7);
-            color: white;
-        }
-
-        .message-name {
-            font-size: 13px;
-            font-weight: 600;
-        }
-
-        .message-time {
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-left: auto;
-        }
-
-        .message-content {
-            padding: 14px 18px;
-            border-radius: var(--radius);
-            line-height: 1.65;
-            font-size: 14px;
-            overflow-x: auto;
-        }
-
+        .message-content { padding: 12px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; overflow-x: auto; }
         .message-content.user {
-            background: var(--user-bg);
-            border: 1px solid var(--user-border);
-            max-width: 80%;
-            margin-left: auto;
-            border-top-right-radius: 4px;
+            background: var(--user-bg); border: 1px solid var(--user-border);
+            max-width: 80%; margin-left: auto; border-top-right-radius: 4px;
         }
+        .message-content.agent { background: var(--bg-card); border: 1px solid var(--border); border-top-left-radius: 4px; }
 
-        .message-content.agent {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-top-left-radius: 4px;
-        }
-
-        /* Markdown styling inside agent messages */
-        .message-content.agent h1,
-        .message-content.agent h2,
-        .message-content.agent h3 {
-            margin: 16px 0 8px;
-            color: var(--accent);
-        }
-        .message-content.agent h1 { font-size: 18px; }
-        .message-content.agent h2 { font-size: 16px; }
-        .message-content.agent h3 { font-size: 14px; }
-
-        .message-content.agent p {
-            margin: 6px 0;
-        }
-
-        .message-content.agent ul,
-        .message-content.agent ol {
-            margin: 6px 0;
-            padding-left: 22px;
-        }
-        .message-content.agent li {
-            margin: 3px 0;
-        }
-
-        .message-content.agent strong {
-            color: var(--text-primary);
-        }
-
-        .message-content.agent em {
-            color: var(--text-secondary);
-        }
-
-        .message-content.agent code {
-            font-family: var(--font-mono);
-            font-size: 13px;
-            background: var(--code-bg);
-            padding: 2px 6px;
-            border-radius: 4px;
-            color: var(--warning);
-        }
-
-        .message-content.agent pre {
+        /* Detail panels inside agent messages */
+        .detail-panel {
             margin: 10px 0;
-            background: var(--code-bg);
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            padding: 12px 14px;
-            overflow-x: auto;
-            position: relative;
+            overflow: hidden;
         }
 
-        .message-content.agent pre code {
-            background: none;
-            padding: 0;
-            color: var(--text-primary);
-            font-size: 12.5px;
-            line-height: 1.5;
-            white-space: pre;
+        .detail-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 12px; background: var(--bg-secondary);
+            cursor: pointer; user-select: none;
+            font-size: 12px; font-weight: 600;
+            transition: background 0.15s;
+        }
+        .detail-header:hover { background: var(--bg-hover); }
+        .detail-header .icon { margin-right: 6px; font-size: 14px; }
+        .detail-header .chevron { color: var(--text-muted); transition: transform 0.2s; font-size: 10px; }
+        .detail-header.collapsed .chevron { transform: rotate(-90deg); }
+
+        .detail-body {
+            padding: 0; max-height: 400px; overflow: auto;
+            transition: max-height 0.25s ease;
+        }
+        .detail-body.collapsed { max-height: 0; overflow: hidden; }
+
+        .detail-body pre {
+            margin: 0; padding: 12px;
+            font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+            background: var(--code-bg); color: var(--text-primary);
+            white-space: pre; overflow-x: auto;
         }
 
-        .message-content.agent blockquote {
-            border-left: 3px solid var(--accent);
-            padding-left: 12px;
-            margin: 8px 0;
-            color: var(--text-secondary);
-        }
+        .detail-panel.dsl .detail-header { border-bottom: 1px solid var(--border); color: var(--accent); }
+        .detail-panel.es .detail-header { border-bottom: 1px solid var(--border); color: var(--success); }
+        .detail-panel.es pre { max-height: 300px; }
 
-        /* Tables in markdown */
-        .message-content.agent table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 10px 0;
-            font-size: 13px;
+        .detail-body .copy-btn {
+            position: sticky; top: 4px; float: right; margin: 4px;
+            background: var(--bg-hover); border: 1px solid var(--border);
+            color: var(--text-secondary); padding: 3px 10px;
+            border-radius: 4px; cursor: pointer; font-size: 11px;
+            transition: all 0.15s; z-index: 1;
         }
+        .detail-body .copy-btn:hover { background: var(--bg-card); color: var(--text-primary); }
 
-        .message-content.agent th,
-        .message-content.agent td {
-            padding: 8px 12px;
-            text-align: left;
-            border: 1px solid var(--border);
+        /* AI explanation section (inside agent message) */
+        .agent-text {
+            line-height: 1.65;
         }
-
-        .message-content.agent th {
-            background: var(--bg-secondary);
-            color: var(--accent);
-            font-weight: 600;
+        .agent-text h1,.agent-text h2,.agent-text h3 { margin: 14px 0 7px; color: var(--accent); }
+        .agent-text h1 { font-size: 17px; }
+        .agent-text h2 { font-size: 15px; }
+        .agent-text h3 { font-size: 13px; }
+        .agent-text p { margin: 5px 0; }
+        .agent-text ul,.agent-text ol { margin: 5px 0; padding-left: 20px; }
+        .agent-text li { margin: 2px 0; }
+        .agent-text strong { color: var(--text-primary); }
+        .agent-text em { color: var(--text-secondary); }
+        .agent-text code {
+            font-family: var(--font-mono); font-size: 12.5px;
+            background: var(--code-bg); padding: 1px 5px;
+            border-radius: 3px; color: #fbbf24;
+        }
+        .agent-text pre {
+            margin: 8px 0; background: var(--code-bg);
+            border: 1px solid var(--border); border-radius: var(--radius-sm);
+            padding: 10px 12px; overflow-x: auto;
             font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
         }
-
-        .message-content.agent td {
-            background: var(--bg-primary);
+        .agent-text blockquote {
+            border-left: 3px solid var(--accent); padding-left: 10px;
+            margin: 6px 0; color: var(--text-secondary);
         }
-
-        .message-content.agent tr:nth-child(even) td {
-            background: var(--bg-secondary);
+        .agent-text table {
+            width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12.5px;
         }
-
-        .message-content.agent hr {
-            border: none;
-            border-top: 1px solid var(--border);
-            margin: 16px 0;
+        .agent-text th,.agent-text td {
+            padding: 6px 10px; text-align: left; border: 1px solid var(--border);
         }
-
-        /* Copy button for code blocks */
-        .code-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 6px 14px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-bottom: none;
+        .agent-text th { background: var(--bg-secondary); color: var(--accent); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+        .agent-text td { background: var(--bg-primary); }
+        .agent-text tr:nth-child(even) td { background: var(--bg-secondary); }
+        .agent-text hr { border: none; border-top: 1px solid var(--border); margin: 14px 0; }
+        .agent-text .code-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 5px 12px; background: var(--bg-secondary);
+            border: 1px solid var(--border); border-bottom: none;
             border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-            font-size: 11px;
-            color: var(--text-muted);
-            margin-top: 10px;
+            font-size: 10px; color: var(--text-muted);
         }
-
-        .code-header + pre {
-            margin-top: 0;
-            border-top-left-radius: 0;
-            border-top-right-radius: 0;
+        .agent-text .code-header + pre { margin-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; }
+        .agent-text .copy-btn {
+            background: none; border: 1px solid var(--border);
+            color: var(--text-secondary); padding: 2px 7px;
+            border-radius: 3px; cursor: pointer; font-size: 10px;
+            transition: all 0.15s;
         }
+        .agent-text .copy-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-        .copy-btn {
-            background: none;
-            border: 1px solid var(--border);
-            color: var(--text-secondary);
-            padding: 2px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-            transition: all 0.2s;
-        }
-
-        .copy-btn:hover {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-        }
-
-        /* Loading indicator */
+        /* Loading */
         .loading {
-            display: none;
-            align-items: center;
-            gap: 10px;
-            padding: 14px 18px;
-            margin-bottom: 20px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            border-top-left-radius: 4px;
+            display: none; align-items: center; gap: 10px;
+            padding: 12px 16px; margin-bottom: 20px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: var(--radius); border-top-left-radius: 4px;
             animation: fadeIn 0.3s ease;
         }
-
-        .loading.active {
-            display: flex;
-        }
+        .loading.active { display: flex; }
 
         .spinner {
-            width: 18px;
-            height: 18px;
-            border: 2px solid var(--border);
-            border-top-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
+            width: 16px; height: 16px;
+            border: 2px solid var(--border); border-top-color: var(--accent);
+            border-radius: 50%; animation: spin 0.8s linear infinite;
             flex-shrink: 0;
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        .loading-text { font-size: 12px; color: var(--text-secondary); }
 
-        .loading-text {
-            font-size: 13px;
-            color: var(--text-secondary);
-        }
-
-        .loading-text .dots::after {
-            content: '';
-            animation: dots 1.5s steps(4, end) infinite;
-        }
-
-        @keyframes dots {
-            0%   { content: ''; }
-            25%  { content: '.'; }
-            50%  { content: '..'; }
-            75%  { content: '...'; }
-            100% { content: ''; }
-        }
-
-        /* Input Area */
-        .input-area {
-            flex-shrink: 0;
-            padding: 16px 0 20px;
-            border-top: 1px solid var(--border);
-        }
-
+        /* Input */
+        .input-area { flex-shrink: 0; padding: 14px 0 18px; border-top: 1px solid var(--border); }
         .input-wrapper {
-            display: flex;
-            gap: 8px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 4px;
-            transition: border-color 0.2s;
+            display: flex; gap: 8px; background: var(--bg-secondary);
+            border: 1px solid var(--border); border-radius: var(--radius);
+            padding: 4px; transition: border-color 0.2s;
         }
-
-        .input-wrapper:focus-within {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
-        }
+        .input-wrapper:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
 
         .input-wrapper textarea {
-            flex: 1;
-            background: none;
-            border: none;
-            outline: none;
-            color: var(--text-primary);
-            font-family: var(--font);
-            font-size: 14px;
-            padding: 10px 12px;
-            resize: none;
-            min-height: 24px;
-            max-height: 120px;
-            line-height: 1.5;
+            flex: 1; background: none; border: none; outline: none;
+            color: var(--text-primary); font-family: var(--font);
+            font-size: 14px; padding: 9px 12px; resize: none;
+            min-height: 22px; max-height: 120px; line-height: 1.5;
         }
-
-        .input-wrapper textarea::placeholder {
-            color: var(--text-muted);
-        }
+        .input-wrapper textarea::placeholder { color: var(--text-muted); }
 
         .send-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 42px;
-            height: 42px;
-            border: none;
-            border-radius: var(--radius-sm);
-            background: var(--accent);
-            color: white;
-            cursor: pointer;
-            transition: all 0.2s;
-            flex-shrink: 0;
-            align-self: flex-end;
-            font-size: 18px;
+            display: flex; align-items: center; justify-content: center;
+            width: 40px; height: 40px; border: none;
+            border-radius: var(--radius-sm); background: var(--accent);
+            color: white; cursor: pointer; transition: all 0.2s;
+            flex-shrink: 0; align-self: flex-end; font-size: 16px;
         }
-
-        .send-btn:hover {
-            background: var(--accent-hover);
-            transform: scale(1.05);
-        }
-
-        .send-btn:active {
-            transform: scale(0.95);
-        }
-
-        .send-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-            transform: none;
-        }
+        .send-btn:hover { background: var(--accent-hover); transform: scale(1.05); }
+        .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
         .input-footer {
-            display: flex;
-            justify-content: space-between;
-            margin-top: 6px;
-            padding: 0 4px;
-            font-size: 11px;
-            color: var(--text-muted);
+            display: flex; justify-content: space-between; margin-top: 5px;
+            padding: 0 4px; font-size: 11px; color: var(--text-muted);
         }
-
         .input-footer kbd {
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 3px;
-            padding: 1px 5px;
-            font-size: 10px;
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 3px; padding: 1px 4px; font-size: 10px;
         }
-
-        /* Clear button */
         .clear-btn {
-            background: none;
-            border: none;
-            color: var(--text-muted);
-            cursor: pointer;
-            font-size: 11px;
-            transition: color 0.2s;
+            background: none; border: none; color: var(--text-muted);
+            cursor: pointer; font-size: 11px; transition: color 0.15s;
         }
+        .clear-btn:hover { color: var(--text-primary); }
 
-        .clear-btn:hover {
-            color: var(--text-primary);
-        }
-
-        /* Responsive */
         @media (max-width: 600px) {
             .app { padding: 0 12px; }
             .message-content.user { max-width: 90%; }
-            .message-content { padding: 12px 14px; font-size: 13px; }
         }
     </style>
 </head>
 <body>
 
 <div class="app" id="app">
-    <!-- Header -->
     <header class="header">
         <div class="header-logo">ES</div>
         <div class="header-text">
@@ -540,26 +307,20 @@
         </div>
     </header>
 
-    <!-- Messages -->
     <div class="messages" id="messages"></div>
 
-    <!-- Loading -->
     <div class="loading" id="loading">
         <div class="spinner"></div>
         <span class="loading-text">Agent 正在思考<span class="dots"></span></span>
     </div>
 
-    <!-- Input -->
     <div class="input-area">
         <div class="input-wrapper">
             <textarea id="input"
                       placeholder="例：找出诊断中含有'心肌梗死'的患者..."
-                      rows="1"
-                      maxlength="2000"
+                      rows="1" maxlength="2000"
                       oninput="autoResize(this)"></textarea>
-            <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="发送 (Enter)">
-                ▶
-            </button>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="发送 (Enter)">▶</button>
         </div>
         <div class="input-footer">
             <span><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行</span>
@@ -569,117 +330,82 @@
 </div>
 
 <script>
-    // ═══════════════════════════════════════════════════════════════
-    // Configure marked.js
-    // ═══════════════════════════════════════════════════════════════
-    marked.setOptions({
-        breaks: true,
-        gfm: true
-    });
+    marked.setOptions({ breaks: true, gfm: true });
 
-    // Custom renderer for copyable code blocks
     const renderer = new marked.Renderer();
     renderer.code = function({ text, lang }) {
         const langLabel = lang ? lang.toUpperCase() : 'JSON';
         const id = 'code-' + Math.random().toString(36).slice(2, 8);
         return '<div class="code-header">'
             + '<span>' + langLabel + '</span>'
-            + '<button class="copy-btn" onclick="copyCode(\'' + id + '\')">📋 复制</button>'
+            + '<button class="copy-btn" onclick="copyText(\'' + id + '\')">📋 复制</button>'
             + '</div>'
             + '<pre><code id="' + id + '">' + escapeHtml(text) + '</code></pre>';
     };
     marked.use({ renderer });
 
-    // Escape HTML to prevent XSS in code blocks
     function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
     }
 
-    // Copy code block content
-    function copyCode(id) {
+    function copyText(id) {
         const el = document.getElementById(id);
         if (!el) return;
         navigator.clipboard.writeText(el.textContent).then(() => {
             const btn = el.parentElement.previousElementSibling?.querySelector('.copy-btn');
-            if (btn) {
-                btn.textContent = '✅ 已复制';
-                setTimeout(() => { btn.textContent = '📋 复制'; }, 2000);
-            }
-        }).catch(() => {
-            // Fallback for older browsers
-            const range = document.createRange();
-            range.selectNode(el);
-            window.getSelection().removeAllRanges();
-            window.getSelection().addRange(range);
-            document.execCommand('copy');
+            if (btn) { btn.textContent = '✅ 已复制'; setTimeout(() => { btn.textContent = '📋 复制'; }, 2000); }
         });
     }
 
-    // ═══════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════
     // Chat logic
-    // ═══════════════════════════════════════════════════════════════
+    // ════════════════════════════════════════════════════
 
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('sendBtn');
     const messages = document.getElementById('messages');
     const loading = document.getElementById('loading');
     const statusLabel = document.getElementById('status-label');
-
     let isProcessing = false;
 
-    // Auto-resize textarea
     function autoResize(el) {
         el.style.height = 'auto';
         el.style.height = Math.min(el.scrollHeight, 120) + 'px';
     }
 
-    // Send message on Enter (Shift+Enter for newline)
     input.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendMessage();
-        }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
 
     async function sendMessage() {
         const question = input.value.trim();
         if (!question || isProcessing) return;
 
-        // Disable input
         isProcessing = true;
         sendBtn.disabled = true;
         input.disabled = true;
 
-        // Add user message
         addUserMessage(question);
-
-        // Clear input
         input.value = '';
         input.style.height = 'auto';
 
-        // Show loading
         loading.classList.add('active');
         statusLabel.textContent = '查询中...';
         scrollToBottom();
 
         try {
-            const response = await fetch('/api/chat', {
+            const resp = await fetch('/api/chat/detail', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ question })
             });
-
-            const data = await response.json();
-
-            // Add agent response
-            addAgentMessage(data.answer, data.elapsed_ms);
-
+            const data = await resp.json();
+            addAgentMessage(data);
         } catch (err) {
-            addAgentMessage('⚠️ 请求失败: ' + err.message, 0);
+            addAgentMessage({ answer: '⚠️ 请求失败: ' + err.message, elapsed_ms: 0 });
         } finally {
-            // Re-enable input
             isProcessing = false;
             sendBtn.disabled = false;
             input.disabled = false;
@@ -691,36 +417,101 @@
     }
 
     function addUserMessage(text) {
-        const now = new Date();
-        const time = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-
+        const t = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
         const div = document.createElement('div');
         div.className = 'message';
         div.innerHTML = '<div class="message-header">'
             + '<div class="message-avatar user">U</div>'
             + '<span class="message-name">查询</span>'
-            + '<span class="message-time">' + time + '</span>'
-            + '</div>'
+            + '<span class="message-time">' + t + '</span></div>'
             + '<div class="message-content user">' + escapeHtml(text) + '</div>';
         messages.appendChild(div);
         scrollToBottom();
     }
 
-    function addAgentMessage(text, elapsedMs) {
-        const now = new Date();
-        const time = now.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-        const elapsed = elapsedMs ? formatElapsed(elapsedMs) : '';
+    function addAgentMessage(data) {
+        const t = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        const elapsed = data.elapsed_ms ? formatElapsed(data.elapsed_ms) : '';
 
-        const div = document.createElement('div');
-        div.className = 'message';
-        div.innerHTML = '<div class="message-header">'
+        const body = document.createElement('div');
+        body.className = 'message-content agent';
+
+        // 1. AI explanation (always shown)
+        const textDiv = document.createElement('div');
+        textDiv.className = 'agent-text';
+        textDiv.innerHTML = marked.parse(data.answer || '');
+        body.appendChild(textDiv);
+
+        // 2. DSL panel (if available)
+        if (data.dsl) {
+            body.appendChild(createDetailPanel('dsl', '🔍 查询 DSL', data.dsl));
+        }
+
+        // 3. ES result panel (if available)
+        if (data.es_result) {
+            body.appendChild(createDetailPanel('es', '📊 ES 原始结果', data.es_result));
+        }
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message';
+        wrapper.innerHTML = '<div class="message-header">'
             + '<div class="message-avatar agent">AI</div>'
             + '<span class="message-name">ESMind</span>'
-            + '<span class="message-time">' + elapsed + ' ' + time + '</span>'
-            + '</div>'
-            + '<div class="message-content agent">' + marked.parse(text) + '</div>';
-        messages.appendChild(div);
+            + '<span class="message-time">' + elapsed + ' ' + t + '</span></div>';
+        wrapper.appendChild(body);
+        messages.appendChild(wrapper);
         scrollToBottom();
+    }
+
+    function createDetailPanel(type, title, content) {
+        const id = 'panel-' + Math.random().toString(36).slice(2, 6);
+        const contentId = id + '-content';
+
+        const panel = document.createElement('div');
+        panel.className = 'detail-panel ' + type;
+
+        const header = document.createElement('div');
+        header.className = 'detail-header collapsed';
+        header.innerHTML = '<span><span class="icon">' + title.split(' ')[0] + '</span>'
+            + title.split(' ').slice(1).join(' ')
+            + '</span><span class="chevron">▼</span>';
+        header.onclick = function() {
+            const body = document.getElementById(contentId);
+            const isCollapsed = body.classList.contains('collapsed');
+            body.classList.toggle('collapsed');
+            header.classList.toggle('collapsed');
+        };
+        panel.appendChild(header);
+
+        const body = document.createElement('div');
+        body.id = contentId;
+        body.className = 'detail-body collapsed';
+
+        // Copy button
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.textContent = '📋 复制全文';
+        copyBtn.onclick = function(e) {
+            e.stopPropagation();
+            const text = content;
+            navigator.clipboard.writeText(text).then(() => {
+                copyBtn.textContent = '✅ 已复制';
+                setTimeout(() => { copyBtn.textContent = '📋 复制全文'; }, 2000);
+            });
+        };
+        body.appendChild(copyBtn);
+
+        const pre = document.createElement('pre');
+        // Format if JSON
+        try {
+            pre.textContent = JSON.stringify(JSON.parse(content), null, 2);
+        } catch(e) {
+            pre.textContent = content;
+        }
+        body.appendChild(pre);
+
+        panel.appendChild(body);
+        return panel;
     }
 
     function formatElapsed(ms) {
@@ -732,9 +523,7 @@
     }
 
     function scrollToBottom() {
-        setTimeout(() => {
-            messages.scrollTop = messages.scrollHeight;
-        }, 50);
+        setTimeout(() => { messages.scrollTop = messages.scrollHeight; }, 50);
     }
 
     function clearMessages() {
@@ -748,11 +537,7 @@
         }
     }
 
-    // Focus input on load
-    window.addEventListener('load', () => {
-        input.focus();
-    });
+    window.addEventListener('load', () => { input.focus(); });
 </script>
-
 </body>
 </html>

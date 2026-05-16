@@ -48,6 +48,19 @@ public class EsTool {
     /** Default sample size for mapping exploration. */
     private static final int SAMPLE_SIZE = 3;
 
+    // -------------------------------------------------------------------------
+    // Last-query capture (for web UI detail view)
+    // -------------------------------------------------------------------------
+    private static volatile String lastQueryDsl = "";
+    private static volatile String lastQueryResult = "";
+
+    /** Returns the DSL of the most recently executed query. */
+    public static String getLastQueryDsl() { return lastQueryDsl; }
+    /** Returns the raw ES result of the most recently executed query. */
+    public static String getLastQueryResult() { return lastQueryResult; }
+    /** Clears the last-query cache. */
+    public static void clearLastQuery() { lastQueryDsl = ""; lastQueryResult = ""; }
+
     private final RestClient client;
 
     /** Cached ES major version, detected on first successful API call. */
@@ -300,6 +313,16 @@ public class EsTool {
             req.setJsonEntity(bodyJson);
 
             JsonNode root = parseBody(client.performRequest(req));
+
+            // Capture for web UI detail view
+            try {
+                lastQueryDsl = MAPPER.writerWithDefaultPrettyPrinter()
+                        .writeValueAsString(MAPPER.readTree(bodyJson));
+            } catch (Exception e) {
+                lastQueryDsl = bodyJson;
+            }
+            lastQueryResult = toPretty(root);
+
             return formatSearchResponse(root, actualSize);
 
         } catch (JsonProcessingException e) {
