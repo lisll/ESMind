@@ -9,8 +9,10 @@ import io.agentscope.core.tool.Toolkit;
 import io.agentscope.harness.agent.HarnessAgent;
 import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Properties;
 import java.util.Scanner;
 import java.util.UUID;
 
@@ -28,54 +30,56 @@ import java.util.UUID;
  *   <li>Subagent orchestration from workspace/subagents/
  * </ul>
  *
- * <h2>Prerequisites</h2>
+ * <h2>Configuration</h2>
  *
- * <ol>
- *   <li>JDK 17+, Maven 3.8+
- *   <li>Set environment variable {@code DASHSCOPE_API_KEY} (or {@code OPENAI_API_KEY})
- *   <li>Accessible Elasticsearch instance (6.x+, auto-detects version)</li>
- * </ol>
+ * <p>Edit {@code src/main/resources/application.properties} (or the
+ * {@code application.properties} on the classpath at runtime) to set model
+ * and ES connection parameters. Environment variables override file values.
  *
  * <h2>Run</h2>
  *
  * <pre>
  * # Interactive mode
- * export DASHSCOPE_API_KEY=sk-xxx
  * mvn compile exec:java -Dexec.mainClass="io.esmind.agent.EsMindAgent"
  *
  * # Single query
- * mvn compile exec:java \\
- *   -Dexec.mainClass="io.esmind.agent.EsMindAgent" \\
+ * mvn compile exec:java -Dexec.mainClass="io.esmind.agent.EsMindAgent" \
  *   -Dexec.args="上个月销量最高的产品是什么？"
  * </pre>
  */
 public class EsMindAgent {
 
     // -------------------------------------------------------------------------
-    // Environment variable names
+    // Property keys (application.properties)
     // -------------------------------------------------------------------------
 
-    /** DashScope / LLM API key. */
-    public static final String ENV_API_KEY = "DASHSCOPE_API_KEY";
+    private static final String PROP_BASE_URL = "esmind.model.base-url";
+    private static final String PROP_API_KEY = "esmind.model.api-key";
+    private static final String PROP_MODEL = "esmind.model.name";
+    private static final String PROP_ES_HOST = "esmind.es.host";
+    private static final String PROP_ES_PORT = "esmind.es.port";
+    private static final String PROP_ES_SCHEME = "esmind.es.scheme";
+    private static final String PROP_ES_USER = "esmind.es.username";
+    private static final String PROP_ES_PASS = "esmind.es.password";
+    private static final String PROP_WORKSPACE = "esmind.workspace";
 
-    /** LLM model name. Defaults to {@code qwen-max}. */
-    public static final String ENV_MODEL_NAME = "AGENTSCOPE_MODEL";
+    // -------------------------------------------------------------------------
+    // Env var overrides (take precedence over application.properties)
+    // -------------------------------------------------------------------------
 
-    /** Elasticsearch connection details. */
-    public static final String ENV_ES_HOST = "ES_HOST";
-    public static final String ENV_ES_PORT = "ES_PORT";
-    public static final String ENV_ES_SCHEME = "ES_SCHEME";
-    public static final String ENV_ES_USERNAME = "ES_USERNAME";
-    public static final String ENV_ES_PASSWORD = "ES_PASSWORD";
-
-    /** Workspace directory. Defaults to {@code .agentscope/workspace}. */
-    public static final String ENV_WORKSPACE = "AGENTSCOPE_WORKSPACE";
+    private static final String ENV_API_KEY = "DASHSCOPE_API_KEY";
+    private static final String ENV_MODEL = "AGENTSCOPE_MODEL";
+    private static final String ENV_ES_HOST = "ES_HOST";
+    private static final String ENV_ES_PORT = "ES_PORT";
+    private static final String ENV_ES_SCHEME = "ES_SCHEME";
+    private static final String ENV_WORKSPACE = "AGENTSCOPE_WORKSPACE";
 
     // -------------------------------------------------------------------------
     // Defaults
     // -------------------------------------------------------------------------
 
     private static final String DEFAULT_MODEL = "qwen-max";
+    private static final String DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
     private static final String DEFAULT_WORKSPACE = ".agentscope/workspace";
     private static final String DEFAULT_ES_HOST = "localhost";
     private static final int DEFAULT_ES_PORT = 9200;
@@ -91,24 +95,36 @@ public class EsMindAgent {
     public static void main(String[] args) throws IOException {
         printBanner();
 
-        // 1. Resolve configuration from environment
-        String apiKey = requireEnv(ENV_API_KEY);
-        String modelName = getEnv(ENV_MODEL_NAME, DEFAULT_MODEL);
-        Path workspace = Paths.get(getEnv(ENV_WORKSPACE, DEFAULT_WORKSPACE));
+        // 1. Load configuration: application.properties ← env var overrides
+        Properties props = loadProperties();
 
-        String esHost = getEnv(ENV_ES_HOST, DEFAULT_ES_HOST);
-        int esPort = Integer.parseInt(getEnv(ENV_ES_PORT, String.valueOf(DEFAULT_ES_PORT)));
-        String esScheme = getEnv(ENV_ES_SCHEME, DEFAULT_ES_SCHEME);
-        String esUsername = System.getenv(ENV_ES_USERNAME);
-        String esPassword = System.getenv(ENV_ES_PASSWORD);
+        String baseUrl      = props.getProperty(PROP_BASE_URL, DEFAULT_BASE_URL);
+        String apiKey       = resolveSecret(props.getProperty(PROP_API_KEY, ""), ENV_API_KEY);
+        String modelName    = resolveOverride(props.getProperty(PROP_MODEL, DEFAULT_MODEL), ENV_MODEL);
+        String esHost       = resolveOverride(props.getProperty(PROP_ES_HOST, DEFAULT_ES_HOST), ENV_ES_HOST);
+        int    esPort       = Integer.parseInt(resolveOverride(
+                                props.getProperty(PROP_ES_PORT, String.valueOf(DEFAULT_ES_PORT)), ENV_ES_PORT));
+        String esScheme     = resolveOverride(props.getProperty(PROP_ES_SCHEME, DEFAULT_ES_SCHEME), ENV_ES_SCHEME);
+        String esUsername   = props.getProperty(PROP_ES_USER, "");
+        String esPassword   = props.getProperty(PROP_ES_PASS, "");
+        Path workspace      = Paths.get(resolveOverride(
+                                props.getProperty(PROP_WORKSPACE, DEFAULT_WORKSPACE), ENV_WORKSPACE));
+
+        if (apiKey == null || apiKey.isBlank()) {
+            System.err.println("ERROR: No API key configured.\n"
+                    + "Set esmind.model.api-key in application.properties\n"
+                    + "or export DASHSCOPE_API_KEY=sk-xxx");
+            System.exit(1);
+        }
 
         // 2. Initialise workspace from bundled template files
         System.out.println("[1/4] Initialising workspace at: " + workspace.toAbsolutePath());
         WorkspaceInitializer.init(workspace);
 
         // 3. Build the LLM model
-        System.out.println("[2/4] Connecting to model: " + modelName);
+        System.out.println("[2/4] Connecting to model: " + modelName + " @ " + baseUrl);
         Model model = DashScopeChatModel.builder()
+                .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .stream(false)
@@ -169,16 +185,61 @@ public class EsMindAgent {
     }
 
     // -------------------------------------------------------------------------
-    // Agent interaction helpers
+    // Configuration loading
     // -------------------------------------------------------------------------
 
     /**
-     * Runs a single agent turn with the given question and prints the response.
+     * Loads {@code application.properties} from the classpath.
+     * Returns an empty {@link Properties} if the resource is not found.
      */
+    static Properties loadProperties() {
+        Properties props = new Properties();
+        try (InputStream is = EsMindAgent.class.getClassLoader()
+                .getResourceAsStream("application.properties")) {
+            if (is != null) {
+                props.load(is);
+            } else {
+                System.out.println("[config] application.properties not found on classpath,"
+                        + " using defaults + env vars");
+            }
+        } catch (IOException e) {
+            System.err.println("[config] Failed to load application.properties: "
+                    + e.getMessage());
+        }
+        return props;
+    }
+
+    /**
+     * Returns the env var value if set, otherwise the file value.
+     */
+    private static String resolveOverride(String fileValue, String envName) {
+        String envValue = System.getenv(envName);
+        return (envValue != null && !envValue.isBlank()) ? envValue : fileValue;
+    }
+
+    /**
+     * Returns the env var value (first match), falling back to file value.
+     * Tries multiple env var names for the same config key.
+     */
+    private static String resolveSecret(String fileValue, String... envNames) {
+        for (String envName : envNames) {
+            String envValue = System.getenv(envName);
+            if (envValue != null && !envValue.isBlank()) {
+                return envValue;
+            }
+        }
+        return fileValue;
+    }
+
+    // -------------------------------------------------------------------------
+    // Agent interaction helpers
+    // -------------------------------------------------------------------------
+
     private static void runSingleTurn(HarnessAgent agent, String question, RuntimeContext ctx) {
         try {
             System.out.println("\n> " + question + "\n");
-            Msg result = agent.call(Msg.builder().role(MsgRole.USER).textContent(question).build(), ctx).block();
+            Msg result = agent.call(
+                    Msg.builder().role(MsgRole.USER).textContent(question).build(), ctx).block();
             if (result != null) {
                 String text = result.getTextContent();
                 if (text != null && !text.isBlank()) {
@@ -191,9 +252,6 @@ public class EsMindAgent {
         }
     }
 
-    /**
-     * Starts an interactive read-eval loop with the HarnessAgent.
-     */
     private static void startInteractiveChat(HarnessAgent agent, RuntimeContext ctx) {
         try (Scanner scanner = new Scanner(System.in)) {
             while (true) {
@@ -216,11 +274,11 @@ public class EsMindAgent {
     // -------------------------------------------------------------------------
 
     private static void printBanner() {
-        System.out.println("\n" +
-                "╔═══════════════════════════════════════════╗\n" +
-                "║    ESMind — NL → Elasticsearch Agent     ║\n" +
-                "║    Powered by AgentScope Java Harness     ║\n" +
-                "╚═══════════════════════════════════════════╝\n");
+        System.out.println("\n"
+                + "╔═══════════════════════════════════════════╗\n"
+                + "║    ESMind — NL → Elasticsearch Agent     ║\n"
+                + "║    Powered by AgentScope Java Harness     ║\n"
+                + "╚═══════════════════════════════════════════╝\n");
     }
 
     private static ParsedArgs parseArgs(String[] args) {
@@ -238,22 +296,6 @@ public class EsMindAgent {
         }
         String question = questionBuilder.length() == 0 ? null : questionBuilder.toString();
         return new ParsedArgs(newSession, question);
-    }
-
-    private static String requireEnv(String name) {
-        String value = System.getenv(name);
-        if (value == null || value.isBlank()) {
-            System.err.println("Required environment variable '" + name
-                    + "' is not set.\nCopy .env.example → .env and fill in your values.");
-            System.exit(1);
-            return null; // unreachable
-        }
-        return value;
-    }
-
-    private static String getEnv(String name, String defaultValue) {
-        String value = System.getenv(name);
-        return (value != null && !value.isBlank()) ? value : defaultValue;
     }
 
     private record ParsedArgs(boolean newSession, String question) {
