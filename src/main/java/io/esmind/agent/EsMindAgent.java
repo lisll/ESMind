@@ -3,7 +3,7 @@ package io.esmind.agent;
 import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
 import io.agentscope.core.message.MsgRole;
-import io.agentscope.core.model.DashScopeChatModel;
+import io.agentscope.core.model.OpenAIChatModel;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.tool.Toolkit;
 import io.agentscope.harness.agent.HarnessAgent;
@@ -123,7 +123,7 @@ public class EsMindAgent {
 
         // 3. Build the LLM model
         System.out.println("[2/4] Connecting to model: " + modelName + " @ " + baseUrl);
-        Model model = DashScopeChatModel.builder()
+        Model model = OpenAIChatModel.builder()
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
