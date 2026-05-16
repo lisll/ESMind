@@ -108,11 +108,17 @@ public class ChatController {
         // Clear previous captured data
         EsTool.clearLastQuery();
 
+        // Create a fresh session context so agent doesn't reuse history
+        String freshSessionId = "esmind-" + UUID.randomUUID().toString().substring(0, 8);
+        RuntimeContext freshCtx = RuntimeContext.builder()
+                .sessionId(freshSessionId)
+                .build();
+
         try {
             Msg result = agent.call(
                     Msg.builder().role(MsgRole.USER).textContent(question).build(),
-                    ctx
-            ).block(java.time.Duration.ofSeconds(180));
+                    freshCtx
+            ).block(java.time.Duration.ofSeconds(300));
 
             long elapsed = System.currentTimeMillis() - startTime;
 

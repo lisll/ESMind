@@ -113,7 +113,10 @@ public class EsMindWebApplication {
                     .sysPrompt("You are an Elasticsearch query expert. Translate natural language"
                             + " questions into Elasticsearch DSL queries, execute them, and present"
                             + " results clearly. Always explore the index mappings first before"
-                            + " writing queries. Use the skills in workspace/skills/ for guidance.")
+                            + " writing queries. Use the skills in workspace/skills/ for guidance."
+                            + " IMPORTANT: Be decisive. Once you have a working query that returns"
+                            + " meaningful results, present them and STOP. Do NOT refine or re-execute"
+                            + " unless the first query failed. Execute each query once.")
                     .model(esmindModel)
                     .workspace(workspacePath)
                     .toolkit(toolkit)
