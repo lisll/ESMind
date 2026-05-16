@@ -210,7 +210,11 @@ public class EsTool {
             // Trigger version detection (also verifies connectivity)
             majorVersion();
 
-            Request req = new Request("GET", "/_cat/indices?format=json&expand_wildcards=all");
+            // ES 6.x doesn't support expand_wildcards on _cat/indices
+            String uri = majorVersion() >= 7
+                    ? "/_cat/indices?format=json&expand_wildcards=all"
+                    : "/_cat/indices?format=json";
+            Request req = new Request("GET", uri);
             JsonNode arr = parseBody(client.performRequest(req));
 
             if (arr.size() == 0) {
