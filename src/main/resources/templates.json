@@ -1,0 +1,141 @@
+{
+  "version": "1.0",
+  "templates": [
+    {
+      "name": "diagnosis_match",
+      "description": "诊断匹配（nested + match_phrase）",
+      "entity_types": ["disease"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "诊断名称"}
+      ],
+      "strategy": {
+        "type": "nested_match",
+        "table": "shouyezhenduan",
+        "field": "shouyezhenduan.diagnosis_name",
+        "keyword": "shouyezhenduan.diagnosis_name.accurate",
+        "use_synonyms": true
+      }
+    },
+    {
+      "name": "lab_test_by_name",
+      "description": "检验项目名称匹配（nested + term）",
+      "entity_types": ["lab_item"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "检验项名称，如白细胞计数"},
+        {"name": "operator", "type": "string", "optional": true, "description": "比较操作符 gt/gte/lt/lte/eq"},
+        {"name": "numericValue", "type": "string", "optional": true, "description": "数值比较目标值"}
+      ],
+      "strategy": {
+        "type": "nested_term",
+        "table": "jianyanbaogaofu",
+        "field": "jianyanbaogaofu.lab_sub_item_name",
+        "keyword": "jianyanbaogaofu.lab_sub_item_name.accurate",
+        "value_field": "jianyanbaogaofu.lab_sub_item_result"
+      }
+    },
+    {
+      "name": "department_match",
+      "description": "科室名称精确匹配（term）",
+      "entity_types": ["department"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "科室名称"}
+      ],
+      "strategy": {
+        "type": "term",
+        "field": "patient.dept.dept_name",
+        "keyword": "patient.dept.dept_name.keyword"
+      }
+    },
+    {
+      "name": "patient_id_lookup",
+      "description": "患者ID精确查询（term）",
+      "entity_types": ["patient_id"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "患者ID"}
+      ],
+      "strategy": {
+        "type": "term",
+        "field": "patient.patient_id"
+      }
+    },
+    {
+      "name": "symptom_search",
+      "description": "症状/主诉全文搜索（match_phrase）",
+      "entity_types": ["symptom"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "症状描述"}
+      ],
+      "strategy": {
+        "type": "match_phrase",
+        "field": "total_src"
+      }
+    },
+    {
+      "name": "medicine_order",
+      "description": "医嘱用药查询（nested + term）",
+      "entity_types": ["medicine"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "药品名称"}
+      ],
+      "strategy": {
+        "type": "nested_term",
+        "table": "yizhu",
+        "field": "yizhu.order_item_name",
+        "keyword": "yizhu.order_item_name.keyword"
+      }
+    },
+    {
+      "name": "time_range_relative",
+      "description": "相对时间范围（range）",
+      "entity_types": [],
+      "parameters": [
+        {"name": "value", "type": "integer", "description": "时间数值"},
+        {"name": "unit", "type": "string", "description": "单位: day/month/year"}
+      ],
+      "strategy": {
+        "type": "range",
+        "field": "binganshouye.admission_time",
+        "date_format": "now-{value}{unit}/d"
+      }
+    },
+    {
+      "name": "exam_by_name",
+      "description": "检查项目名称匹配（nested + match_phrase）",
+      "entity_types": ["exam_item"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "检查项目名称，如头颅MR"}
+      ],
+      "strategy": {
+        "type": "nested_match",
+        "table": "jianchabaogaofu",
+        "field": "jianchabaogaofu.exam_item_name",
+        "keyword": "jianchabaogaofu.exam_item_name.accurate",
+        "use_synonyms": false
+      }
+    },
+    {
+      "name": "surgery_lookup",
+      "description": "手术查询（nested + match_phrase）",
+      "entity_types": ["surgery"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "手术名称"}
+      ],
+      "strategy": {
+        "type": "nested_match",
+        "table": "shoushu",
+        "field": "shoushu.surgery_name",
+        "keyword": "shoushu.surgery_name.keyword",
+        "use_synonyms": false
+      }
+    },
+    {
+      "name": "multi_condition_bool",
+      "description": "多条件组合查询（bool + must）",
+      "entity_types": [],
+      "parameters": [],
+      "strategy": {
+        "type": "bool_combine"
+      }
+    }
+  ]
+}

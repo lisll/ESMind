@@ -4,16 +4,19 @@ import io.esmind.compiler.SchemaField;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.strategy.StrategySelector;
+import io.esmind.template.TemplateEngine;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
 /**
- * AST Builder — 将 SemanticIR + Strategy 构建为 AST。
+ * AST Builder — 将 SemanticIR + Template 构建为 AST。
  *
  * <p>职责：
  * <ol>
  *   <li>遍历 SemanticIR 的 entities</li>
- *   <li>对每个 entity，通过 StrategySelector 获取 AST 节点</li>
+ *   <li>对每个 entity，通过 TemplateEngine 获取 AST 节点（替代旧 StrategySelector）</li>
  *   <li>处理 time_constraint 生成 RangeNode</li>
  *   <li>组装 BoolNode + NestedNode 树</li>
  *   <li>处理 aggregation</li>
@@ -21,12 +24,16 @@ import java.util.List;
  */
 public class ASTBuilder {
 
+    private static final Logger log = LoggerFactory.getLogger(ASTBuilder.class);
+
     private final SchemaRegistry schema;
     private final StrategySelector strategySelector;
+    private final TemplateEngine templateEngine;
 
-    public ASTBuilder(SchemaRegistry schema, StrategySelector strategySelector) {
+    public ASTBuilder(SchemaRegistry schema, StrategySelector strategySelector, TemplateEngine templateEngine) {
         this.schema = schema;
         this.strategySelector = strategySelector;
+        this.templateEngine = templateEngine;
     }
 
     /**
@@ -36,10 +43,19 @@ public class ASTBuilder {
         QueryNode.BoolNode root = new QueryNode.BoolNode();
         int order = 0;
 
-        // 1. 处理每个实体
+        // 1. 处理每个实体 — 优先使用 TemplateEngine，回退 StrategySelector
         List<SemanticIR.Entity> entities = ir.getEntities();
         for (SemanticIR.Entity entity : entities) {
-            QueryNode node = strategySelector.buildNode(entity, order++);
+            QueryNode node;
+            try {
+                // TemplateEngine 处理已知 entity types
+                node = templateEngine.buildNode(entity);
+            } catch (Exception e) {
+                // 回退到旧的 StrategySelector
+                log.warn("TemplateEngine failed for {}={}, falling back: {}",
+                        entity.getType(), entity.getValue(), e.getMessage());
+                node = strategySelector.buildNode(entity, order++);
+            }
             // entity 默认加到 must
             root.addMust(node);
         }

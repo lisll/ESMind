@@ -10,9 +10,11 @@ import io.esmind.compiler.SchemaField;
 import io.esmind.compiler.SchemaLoader;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.renderer.DSLRenderer;
+import io.esmind.renderer.ResultTransformer;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.semantic.SemanticParser;
 import io.esmind.strategy.StrategySelector;
+import io.esmind.template.TemplateEngine;
 import io.esmind.validator.QueryValidator;
 
 /**
@@ -49,9 +51,11 @@ public class CompilerDemo {
         // 3. 初始化各组件
         System.out.println("\n[2] Initializing components...");
         StrategySelector strategySelector = new StrategySelector(schema);
-        ASTBuilder astBuilder = new ASTBuilder(schema, strategySelector);
+        TemplateEngine templateEngine = new TemplateEngine();
+        ASTBuilder astBuilder = new ASTBuilder(schema, strategySelector, templateEngine);
         DSLRenderer renderer = new DSLRenderer();
         QueryValidator validator = new QueryValidator(schema);
+        ResultTransformer resultTransformer = new ResultTransformer();
 
         // 4. 测试 DSL 生成（不依赖 LLM）
         System.out.println("\n[3] Testing DSL generation (without LLM)...");

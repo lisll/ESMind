@@ -7,9 +7,11 @@ import io.esmind.compiler.EsRestClient;
 import io.esmind.compiler.SchemaLoader;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.renderer.DSLRenderer;
+import io.esmind.renderer.ResultTransformer;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.semantic.SemanticParser;
 import io.esmind.strategy.StrategySelector;
+import io.esmind.template.TemplateEngine;
 import io.esmind.validator.QueryValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,11 +36,14 @@ public class EsMindCompiler {
     private final DSLRenderer dslRenderer;
     private final QueryValidator queryValidator;
     private final EsRestClient esClient;
+    private final TemplateEngine templateEngine;
+    private final ResultTransformer resultTransformer;
     private final String indexName;
 
     public EsMindCompiler(SchemaRegistry schema, SemanticParser parser,
                           ASTBuilder astBuilder, DSLRenderer renderer,
                           QueryValidator validator, EsRestClient esClient,
+                          TemplateEngine templateEngine, ResultTransformer resultTransformer,
                           String indexName) {
         this.schema = schema;
         this.semanticParser = parser;
@@ -46,6 +51,8 @@ public class EsMindCompiler {
         this.dslRenderer = renderer;
         this.queryValidator = validator;
         this.esClient = esClient;
+        this.templateEngine = templateEngine;
+        this.resultTransformer = resultTransformer;
         this.indexName = indexName;
     }
 
@@ -105,7 +112,11 @@ public class EsMindCompiler {
                 // Search query
                 esResult = esClient.search(indexName, dsl);
                 response.setEsRawResult(esResult);
-                response.setAnswer(formatAnswer(esResult));
+                // 使用 ResultTransformer 格式化
+                ResultTransformer.TransformResult tr = resultTransformer.transform(esResult, container);
+                response.setAnswer(tr.getSummary());
+                response.setMarkdownTable(tr.getMarkdownTable());
+                response.setTotalHits(tr.getTotalHits());
             }
 
             long esElapsed = System.currentTimeMillis() - esStart;
@@ -122,21 +133,6 @@ public class EsMindCompiler {
         return response;
     }
 
-    private String formatAnswer(String esResult) {
-        try {
-            com.fasterxml.jackson.databind.JsonNode root = MAPPER.readTree(esResult);
-            com.fasterxml.jackson.databind.JsonNode hits = root.get("hits");
-            if (hits == null) return "ES 返回了空结果。";
-
-            long total = hits.get("total").asLong();
-            if (total == 0) return "未查询到符合条件的患者。";
-
-            return "共查询到 " + total + " 条结果。";
-        } catch (Exception e) {
-            return "查询完成，结果解析出错: " + e.getMessage();
-        }
-    }
-
     // ===== Response =====
 
     public static class QueryResponse {
@@ -147,6 +143,8 @@ public class EsMindCompiler {
         private String esRawResult;
         private String answer;
         private String error;
+        private String markdownTable;
+        private long totalHits;
         private QueryValidator.ValidationResult validationResult;
         private long totalElapsedMs;
         private long esElapsedMs;
@@ -171,6 +169,12 @@ public class EsMindCompiler {
 
         public String getAnswer() { return answer; }
         public void setAnswer(String v) { this.answer = v; }
+
+        public String getMarkdownTable() { return markdownTable; }
+        public void setMarkdownTable(String v) { this.markdownTable = v; }
+
+        public long getTotalHits() { return totalHits; }
+        public void setTotalHits(long v) { this.totalHits = v; }
 
         public String getError() { return error; }
         public void setError(String v) { this.error = v; }
