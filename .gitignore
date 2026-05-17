@@ -1,12 +1,4 @@
-target/
-.agentscope/
-*.db
-*.sqlite
-.env
-.DS_Store
-*.log
-.idea/
-*.iml
-.settings/
-.project
-.classpath
+# Test data artifacts (synonym dictionary cache, feedback history, schema cache)
+/data/
+# Maven build output
+/target/

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.esmind.ast.QueryNode;
 import io.esmind.semantic.SemanticIR;
+import io.esmind.semantic.SynonymDictionary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -143,7 +144,7 @@ public class TemplateEngine {
 
         // 同义词（如果模板启用）
         if (template.getStrategy().isUseSynonyms()) {
-            for (String syn : OntologyHelper.getSynonyms(entity.getType(), value)) {
+            for (String syn : SynonymDictionary.getDefault().getSynonyms(entity.getType(), value)) {
                 if (!syn.equals(value)) {
                     should.addShould(new QueryNode.MatchPhraseNode(template.getStrategy().getField(), syn));
                 }
@@ -295,32 +296,4 @@ public class TemplateEngine {
         }
     }
 
-    // ===== OntologyHelper (移植自 StrategySelector) =====
-
-    public static class OntologyHelper {
-        private static final Map<String, Map<String, List<String>>> SYNONYMS = new HashMap<>();
-
-        static {
-            Map<String, List<String>> diseaseSyns = new HashMap<>();
-            diseaseSyns.put("脑梗死", Arrays.asList("脑梗塞", "脑血栓", "缺血性脑卒中", "cerebral infarction"));
-            diseaseSyns.put("糖尿病", Arrays.asList("diabetes", "DM", "2型糖尿病"));
-            diseaseSyns.put("高血压", Arrays.asList("hypertension", "原发性高血压"));
-            diseaseSyns.put("冠心病", Arrays.asList("冠状动脉粥样硬化性心脏病", "coronary heart disease"));
-            SYNONYMS.put("disease", diseaseSyns);
-        }
-
-        public static List<String> getSynonyms(String type, String value) {
-            Map<String, List<String>> typeMap = SYNONYMS.getOrDefault(type, Collections.emptyMap());
-            List<String> result = new ArrayList<>(typeMap.getOrDefault(value, Collections.emptyList()));
-            // 去重
-            result.remove(value);
-            return result;
-        }
-
-        public static void addSynonym(String type, String term, String synonym) {
-            SYNONYMS.computeIfAbsent(type, k -> new HashMap<>())
-                    .computeIfAbsent(term, k -> new ArrayList<>())
-                    .add(synonym);
-        }
-    }
 }

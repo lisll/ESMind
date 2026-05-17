@@ -49,7 +49,7 @@ public class SchemaRegistry {
             }
         }
 
-        if (field.isNested() && field.getNestedPath() != null) {
+        if (field.getNestedPath() != null) {
             fieldsByNestedPath.computeIfAbsent(field.getNestedPath(), k -> new ArrayList<>()).add(field);
         }
     }

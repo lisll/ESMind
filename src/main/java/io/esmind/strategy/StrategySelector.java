@@ -4,6 +4,7 @@ import io.esmind.ast.QueryNode;
 import io.esmind.compiler.SchemaField;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.semantic.SemanticIR;
+import io.esmind.semantic.SynonymDictionary;
 
 import java.util.*;
 
@@ -78,7 +79,7 @@ public class StrategySelector {
         }
 
         // 同义词列表
-        List<String> synonyms = OntologyHelper.getSynonyms("disease", value);
+        List<String> synonyms = SynonymDictionary.getDefault().getSynonyms("disease", value);
         if (synonyms.isEmpty()) {
             synonyms = Collections.singletonList(value);
         }
@@ -185,70 +186,11 @@ public class StrategySelector {
         return new QueryNode.MatchPhraseNode("yizhu.order_item_name", medName);
     }
 
-    /** 通用 nested 策略 */
     private QueryNode buildNestedStrategy(SchemaField field, String value) {
         QueryNode.NestedNode nested = new QueryNode.NestedNode();
         nested.setPath(field.getNestedPath());
         nested.setQuery(new QueryNode.MatchPhraseNode(field.getMatchField(), value));
         nested.setInnerHitsSize(0);
         return nested;
-    }
-
-    // ===== OntologyHelper (embedded for MVP) =====
-
-    /**
-     * 医疗同义词查询（简化版，内联到 StrategySelector）。
-     * 后续可抽取为独立 OntologyResolver。
-     */
-    public static class OntologyHelper {
-        private static final Map<String, List<String>> DISEASE_SYNONYMS = new HashMap<>();
-        private static final Map<String, List<String>> LAB_SYNONYMS = new HashMap<>();
-        private static final Map<String, List<String>> DEPT_SYNONYMS = new HashMap<>();
-
-        static {
-            // 疾病同义词
-            DISEASE_SYNONYMS.put("脑梗死", Arrays.asList("脑梗死", "脑卒中", "脑梗", "脑血栓", "cerebral infarction", "脑梗塞"));
-            DISEASE_SYNONYMS.put("糖尿病", Arrays.asList("糖尿病", "diabetes", "DM", "2型糖尿病"));
-            DISEASE_SYNONYMS.put("高血压", Arrays.asList("高血压", "hypertension", "高血压病"));
-            DISEASE_SYNONYMS.put("冠心病", Arrays.asList("冠心病", "冠状动脉粥样硬化性心脏病", "coronary heart disease", "CHD"));
-            DISEASE_SYNONYMS.put("心肌梗死", Arrays.asList("心肌梗死", "心梗", "急性心肌梗死", "myocardial infarction"));
-
-            // 检验同义词
-            LAB_SYNONYMS.put("白细胞", Arrays.asList("白细胞", "WBC", "白细胞计数", "White Blood Cell"));
-            LAB_SYNONYMS.put("红细胞", Arrays.asList("红细胞", "RBC", "红细胞计数"));
-            LAB_SYNONYMS.put("血糖", Arrays.asList("血糖", "GLU", "葡萄糖", "blood glucose"));
-            LAB_SYNONYMS.put("血小板", Arrays.asList("血小板", "PLT", "血小板计数"));
-            LAB_SYNONYMS.put("C反应蛋白", Arrays.asList("C反应蛋白", "CRP", "hs-CRP"));
-            LAB_SYNONYMS.put("脑脊液", Arrays.asList("脑脊液", "CSF", "cerebrospinal fluid"));
-
-            // 科室同义词
-            DEPT_SYNONYMS.put("神经内科", Arrays.asList("神经内科", "神经科", "neurology"));
-            DEPT_SYNONYMS.put("ICU", Arrays.asList("ICU", "重症监护室", "重症医学科", "intensive care unit"));
-            DEPT_SYNONYMS.put("急诊科", Arrays.asList("急诊科", "急诊", "emergency"));
-        }
-
-        public static List<String> getSynonyms(String type, String value) {
-            Map<String, List<String>> dict;
-            switch (type) {
-                case "disease": dict = DISEASE_SYNONYMS; break;
-                case "lab_item": dict = LAB_SYNONYMS; break;
-                case "department": dict = DEPT_SYNONYMS; break;
-                default: return Collections.singletonList(value);
-            }
-            // 先精确匹配
-            if (dict.containsKey(value)) return dict.get(value);
-            // 包含匹配
-            for (Map.Entry<String, List<String>> e : dict.entrySet()) {
-                if (e.getKey().contains(value) || value.contains(e.getKey())) {
-                    return e.getValue();
-                }
-                for (String syn : e.getValue()) {
-                    if (syn.contains(value) || value.contains(syn)) {
-                        return e.getValue();
-                    }
-                }
-            }
-            return Collections.singletonList(value);
-        }
     }
 }
