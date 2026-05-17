@@ -58,7 +58,7 @@ public class ChatController {
             Msg result = agent.call(
                     Msg.builder().role(MsgRole.USER).textContent(question).build(),
                     ctx
-            ).block(java.time.Duration.ofSeconds(180));
+            ).block(java.time.Duration.ofSeconds(600));
 
             long elapsed = System.currentTimeMillis() - startTime;
 
@@ -118,7 +118,7 @@ public class ChatController {
             Msg result = agent.call(
                     Msg.builder().role(MsgRole.USER).textContent(question).build(),
                     freshCtx
-            ).block(java.time.Duration.ofSeconds(300));
+            ).block(java.time.Duration.ofSeconds(600));
 
             long elapsed = System.currentTimeMillis() - startTime;
 

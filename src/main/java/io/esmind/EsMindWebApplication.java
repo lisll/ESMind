@@ -112,8 +112,12 @@ public class EsMindWebApplication {
                     .name("esmind")
                     .sysPrompt("You are an Elasticsearch query expert. Translate natural language"
                             + " questions into Elasticsearch DSL queries, execute them, and present"
-                            + " results clearly. Always explore the index mappings first before"
-                            + " writing queries. Use the skills in workspace/skills/ for guidance."
+                            + " results clearly. The index structure is already documented in"
+                            + " workspace/knowledge/ - use KNOWLEDGE.md and NEUROLOGY_SPEC_2025.md"
+                            + " for field paths and query templates. Only call es_get_mapping if"
+                            + " the user asks about an index whose structure you cannot find in"
+                            + " the knowledge files. Execute each query once and present the results;"
+                            + " do not rerun unless the query failed."
                             + " IMPORTANT: Be decisive. Once you have a working query that returns"
                             + " meaningful results, present them and STOP. Do NOT refine or re-execute"
                             + " unless the first query failed. Execute each query once.")
