@@ -4,36 +4,28 @@
 
 ## 数据环境
 
-**索引名:** `ddd_clinical_inhistory_0812112623`
-**ES 版本:** 6.5.4（mapping type: `typemr`）
-**文档数:** 15,585（全部为住院数据）
-**结构:** 每文档 = 一个就诊次
+**索引:** `ddd_clinical_inhistory_0812112623`（ES 6.5.4, type: `typemr`）
+**文档:** 15,585（全部住院），每文档=一个就诊次
+**结构:** `nested` (161个业务表) + `object` (28个) — 查询方式不同
 
-**关键约束:**
-- `dynamic: strict` — 只允许 mapping 中定义的字段
-- 字段类型: `nested` (161个业务表) + `object` (28个) — 查询方式不同
+## 关键约束
 - `_source.includes = ["patient*"]` — 仅 patient 在 _source 中
-- nested 数据需用 **docvalue_fields** 替代 inner_hits _source
-- ES `_id` 格式: `{hash}{hospitalCode}##{visitType}#{patientId}#{visitId}` (1=门诊,2=住院)
+- `dynamic: strict` — 只能查 mapping 定义的字段
+- nested 数据必须用 **docvalue_fields** 替代 inner_hits _source
 
 ## 查询规则
 
-### object 类型 — 直接查询
-binganshouye, patient, ruyuanjilu, chuyuanjilu, shoucibingchengjilu
-```json
-{"range": {"binganshouye.admission_time": {"gte": "2024-01-01"}}}
-{"match": {"binganshouye.sex": "男"}}
-```
+### Object 类型（直接查询）
+binganshouye, patient, ruyuanjilu, chuyuanjilu, shoucibingchengjilu — 直接 field 查询。
 
-### nested 类型 — 必须用 nested 查询 + inner_hits
-shouyezhenduan, yizhu, jianyanbaogaofu, jianchabaogaofu, 等 161 个
-```json
-{"_source": false, "query": {"nested": {"path": "shouyezhenduan", "query": {"match": {"shouyezhenduan.diagnosis_name": "脑梗死"}}, "inner_hits": {"_source": false, "docvalue_fields": [{"field": "shouyezhenduan.diagnosis_name.accurate", "format": "use_field_mapping"}]}}}}
-```
+### Nested 类型（行式数据）
+jianyanbaogaofu(检验), jianchabaogaofu(检查), yizhu(医嘱), shouyezhenduan(诊断), shoushu(手术)等 161 个表 — 必须用 nested query + inner_hits + docvalue_fields。
 
-## 行为约定
-- **使用 KNOWLEDGE.md** — 里面有完整字段路径和查询模板
-- **不需要 es_get_mapping** — 结构已记录在知识库中
-- **结果要可读** — Markdown 表格展示
-- **只读查询** — 不执行写入
-- **日期格式** — `yyyy-MM-dd HH:mm:ss`
+## 工作流程
+
+1. **看懂需求**: 医生说的"血常规白细胞计数"、"[某检验项]"等 → KNOWLEDGE.md 中有完整变量到 ES 路径的映射
+2. **用 KNOWLEDGE.md 查路径**: 里面有所有检验分类（血常规24项、生化36项、凝血9项、脑脊液等）及对应 lab_sub_item_name
+3. **用 NERUOLOGY_SPEC_2025.md 确认变量定义**: 该文件是神经科调取规范的权威来源
+4. **不需要 es_get_mapping**: 结构已记录在 KNOWLEDGE.md 和 NERUOLOGY_SPEC_2025.md 中
+5. **查询时注意**: 检验项是行数据（在 jianyanbaogaofu 的 lab_sub_item_name 中过滤），不是独立字段
+6. **一次查出，Markdown 展示**: 不反复重试
