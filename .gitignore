@@ -2,3 +2,10 @@
 /data/
 # Maven build output
 /target/
+# Runtime workspace
+.agentscope/
+# Maven shade plugin artifact
+dependency-reduced-pom.xml
+# Downloaded model data (extract/postStructuring)
+extract-model.json
+poststruct-model.json
