@@ -397,32 +397,37 @@ public class EsTool {
             JsonNode fieldDef = entry.getValue();
 
             String type = fieldDef.has("type") ? fieldDef.get("type").asText() : "object";
-            sb.append(indent).append("- **").append(fieldName).append("** (`").append(type).append("`");
+            JsonNode subProps = fieldDef.get("properties");
+            int subCount = subProps != null ? subProps.size() : 0;
 
-            // Mark nested types as business tables
+            sb.append(indent).append("- **").append(fieldName).append("** (`").append(type).append("`");
             if ("nested".equals(type)) {
-                sb.append(") 💠 [TABLE]");
+                sb.append(") 💠 [TABLE, ").append(subCount).append(" fields]");
+            } else if (subCount > 0) {
+                sb.append(") 📋 [object, ").append(subCount).append(" fields]");
             } else {
                 sb.append(")");
             }
 
-            if (fieldDef.has("fields")) {
-                // Show keyword/text sub-fields inline
-                JsonNode subFields = fieldDef.get("fields");
-                Iterator<String> subNames = subFields.fieldNames();
-                while (subNames.hasNext()) {
-                    String sub = subNames.next();
-                    JsonNode subDef = subFields.get(sub);
-                    String subType = subDef.has("type") ? subDef.get("type").asText() : "?";
-                    sb.append(" → .").append(sub).append(" (`").append(subType).append("`)");
+            // Show sub-field names inline (no further recursion)
+            if (subProps != null && subCount > 0) {
+                sb.append(" — ");
+                Iterator<Map.Entry<String, JsonNode>> subFields = subProps.fields();
+                int shown = 0;
+                while (subFields.hasNext() && shown < 20) {
+                    Map.Entry<String, JsonNode> sub = subFields.next();
+                    String subType = sub.getValue().has("type") ? sub.getValue().get("type").asText() : "object";
+                    sb.append(sub.getKey()).append("(").append(subType).append("), ");
+                    shown++;
+                }
+                if (subCount > 20) {
+                    sb.append("... (").append(subCount - 20).append(" more)");
+                } else {
+                    // Remove trailing ", "
+                    sb.setLength(sb.length() - 2);
                 }
             }
             sb.append("\n");
-
-            // Recurse into nested properties (for nested tables, shows their fields)
-            if (fieldDef.has("properties")) {
-                appendProperties(sb, fieldDef.get("properties"), indent + "    ");
-            }
         }
     }
 

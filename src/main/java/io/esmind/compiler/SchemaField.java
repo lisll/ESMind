@@ -1,11 +1,13 @@
 package io.esmind.compiler;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import java.util.List;
 
 /**
  * Schema 注册表中的字段元数据。
  * 每个字段对应 ES mapping 中的一个字段。
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class SchemaField {
 
     private String fieldName;       // 完整字段路径 shouyezhenduan.diagnosis_name

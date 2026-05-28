@@ -308,22 +308,142 @@ public class ResultTransformer {
         public Map<String, Object> build(Map<String, Object> source,
                                            Map<String, List<Map<String, Object>>> innerHits,
                                            JsonNode rawHit) {
-            Map<String, Object> result = new LinkedHashMap<>(source);
+            Map<String, Object> result = new LinkedHashMap<>();
 
-            // 如果有 inner_hits，将第一个 nested 表的前 3 行合并到顶层
+            // Extract patient basic info from menzhenjiuzhenjilu
+            Map<String, Object> mzj = safeGet(source, "menzhenjiuzhenjilu");
+            if (mzj != null) {
+                putIfPresent(result, "姓名", mzj, "name");
+                putIfPresent(result, "性别", mzj, "sex_name");
+                putIfPresent(result, "年龄", mzj, "age");
+                putIfPresent(result, "就诊科室", mzj, "visit_dept_name");
+                putIfPresent(result, "就诊时间", mzj, "visit_time");
+                putIfPresent(result, "就诊类型", mzj, "visit_type_name");
+                putIfPresent(result, "医生", mzj, "visit_doctor_name");
+                putIfPresent(result, "患者ID", mzj, "patient_id");
+            }
+
+            // Fallback: patient object fields
+            Map<String, Object> patient = safeGet(source, "patient");
+            if (patient != null && !result.containsKey("患者ID")) {
+                putIfPresent(result, "患者ID", patient, "patient_id");
+                putIfPresent(result, "住院号", patient, "visit_id");
+            }
+
+            // Fallback for inpatient records: extract from binganshouye
+            if (!result.containsKey("姓名")) {
+                List<Map<String, Object>> baList = safeGetList(source, "binganshouye");
+                if (baList != null && !baList.isEmpty()) {
+                    Map<String, Object> ba = baList.get(0);
+                    putIfPresent(result, "姓名", ba, "name");
+                    putIfPresent(result, "性别", ba, "sex_name");
+                    putIfPresent(result, "年龄", ba, "age");
+                    putIfPresent(result, "就诊科室", ba, "admission_dept_name");
+                    putIfPresent(result, "就诊时间", ba, "admission_time");
+                    if (!result.containsKey("就诊类型")) result.put("就诊类型", "住院");
+                    putIfPresent(result, "患者ID", ba, "patient_id");
+                }
+            }
+
+            // Inner hits: first 3 rows of key nested tables
             if (!innerHits.isEmpty()) {
                 for (Map.Entry<String, List<Map<String, Object>>> entry : innerHits.entrySet()) {
+                    String tableName = entry.getKey();
                     List<Map<String, Object>> rows = entry.getValue();
-                    if (!rows.isEmpty()) {
-                        Map<String, Object> firstRow = rows.get(0);
-                        for (Map.Entry<String, Object> f : firstRow.entrySet()) {
-                            result.put(entry.getKey() + "." + f.getKey(), f.getValue());
-                        }
+                    if (rows.isEmpty()) continue;
+
+                    // Pick the first row's key display fields
+                    Map<String, Object> first = rows.get(0);
+                    String key = tableName + "(" + rows.size() + ")";
+                    String display = extractSummary(first);
+                    if (display != null) {
+                        result.put(key, display);
                     }
                 }
             }
 
             return result;
+        }
+
+        @SuppressWarnings("unchecked")
+        private Map<String, Object> safeGet(Map<String, Object> map, String key) {
+            Object val = map.get(key);
+            if (val instanceof Map) {
+                return (Map<String, Object>) val;
+            }
+            return null;
+        }
+
+        @SuppressWarnings("unchecked")
+        private List<Map<String, Object>> safeGetList(Map<String, Object> map, String key) {
+            Object val = map.get(key);
+            if (val instanceof List) {
+                return (List<Map<String, Object>>) val;
+            }
+            return null;
+        }
+
+        private void putIfPresent(Map<String, Object> target, String label,
+                                   Map<String, Object> source, String key) {
+            Object val = source.get(key);
+            if (val != null && !val.toString().isBlank()) {
+                target.put(label, val.toString());
+            }
+        }
+
+        private String extractSummary(Map<String, Object> fields) {
+            // Try common display fields
+            for (String key : new String[]{"diagnosis_name", "order_item_name",
+                    "norm_lab_item_name", "lab_item_name", "de_name",
+                    "norm_diagnosis_name", "mr_name", "s_value"}) {
+                Object val = fields.get(key);
+                if (val != null && !val.toString().isBlank()) {
+                    return val.toString();
+                }
+            }
+            return null;
+        }
+
+        /** Also extract inner_hits with field-level detail */
+        public String formatInnerHitsDetail(Map<String, List<Map<String, Object>>> innerHits) {
+            if (innerHits.isEmpty()) return "";
+
+            StringBuilder sb = new StringBuilder();
+            for (Map.Entry<String, List<Map<String, Object>>> entry : innerHits.entrySet()) {
+                String tableName = entry.getKey();
+                List<Map<String, Object>> rows = entry.getValue();
+                if (rows.isEmpty()) continue;
+
+                sb.append("\n**").append(tableName).append("** (").append(rows.size()).append("行):\n\n");
+                // Infer columns
+                java.util.Set<String> cols = rows.get(0).keySet();
+                java.util.List<String> colList = new ArrayList<>();
+                // Filter meaningful columns
+                for (String c : cols) {
+                    if (!c.contains("_code") && !c.contains("md5") && !c.contains("update_time")
+                            && !c.contains("create_time") && c.length() < 30
+                            && !c.equals("_id") && !c.equals("id")) {
+                        colList.add(c);
+                    }
+                }
+                if (colList.size() > 8) colList = colList.subList(0, 8);
+
+                sb.append("| ").append(String.join(" | ", colList)).append(" |\n");
+                sb.append("| ").append(colList.stream().map(c -> "---").collect(java.util.stream.Collectors.joining(" | "))).append(" |\n");
+
+                for (Map<String, Object> row : rows.subList(0, Math.min(rows.size(), 5))) {
+                    sb.append("| ");
+                    for (String c : colList) {
+                        Object v = row.getOrDefault(c, "");
+                        String s = v != null ? v.toString() : "";
+                        if (s.length() > 30) s = s.substring(0, 27) + "...";
+                        sb.append(s.replace("|", "\\|")).append(" | ");
+                    }
+                    sb.append("\n");
+                }
+                sb.append("\n");
+            }
+            return sb.toString();
         }
     }
 

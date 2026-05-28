@@ -1,24 +1,19 @@
 package io.esmind.ast;
 
-import io.esmind.compiler.SchemaField;
-import io.esmind.compiler.SchemaRegistry;
 import io.esmind.semantic.SemanticIR;
-import io.esmind.strategy.StrategySelector;
-import io.esmind.template.TemplateEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
+import java.util.*;
 
 /**
- * AST Builder — 将 SemanticIR + Template 构建为 AST。
- *
- * <p>职责：
+ * AST Builder — 将已解析的 SemanticIR 转换为 AST。
+ * <p>
+ * 纯机械转换，无业务逻辑：
  * <ol>
- *   <li>遍历 SemanticIR 的 entities</li>
- *   <li>对每个 entity，通过 TemplateEngine 获取 AST 节点（替代旧 StrategySelector）</li>
- *   <li>处理 time_constraint 生成 RangeNode</li>
- *   <li>组装 BoolNode + NestedNode 树</li>
+ *   <li>按 table 字段对 Entity 分组（null → 顶级）</li>
+ *   <li>每组创建一个 QueryNode.BoolNode，range 类型进 filter，其余进 must</li>
+ *   <li>table 非 null 时用 QueryNode.NestedNode 包裹</li>
  *   <li>处理 aggregation</li>
  * </ol>
  */
@@ -26,102 +21,165 @@ public class ASTBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(ASTBuilder.class);
 
-    private final SchemaRegistry schema;
-    private final StrategySelector strategySelector;
-    private final TemplateEngine templateEngine;
-
-    public ASTBuilder(SchemaRegistry schema, StrategySelector strategySelector, TemplateEngine templateEngine) {
-        this.schema = schema;
-        this.strategySelector = strategySelector;
-        this.templateEngine = templateEngine;
+    public ASTBuilder() {
+        // 无状态，无依赖
     }
 
     /**
-     * 从 SemanticIR 构建完整的查询 AST。
+     * 从已解析的 SemanticIR 构建查询 AST。
      */
     public QueryContainer build(SemanticIR ir) {
         QueryNode.BoolNode root = new QueryNode.BoolNode();
-        int order = 0;
 
-        // 1. 处理每个实体 — 优先使用 TemplateEngine，回退 StrategySelector
-        List<SemanticIR.Entity> entities = ir.getEntities();
-        for (SemanticIR.Entity entity : entities) {
-            QueryNode node;
-            try {
-                // TemplateEngine 处理已知 entity types
-                node = templateEngine.buildNode(entity);
-            } catch (Exception e) {
-                // 回退到旧的 StrategySelector
-                log.warn("TemplateEngine failed for {}={}, falling back: {}",
-                        entity.getType(), entity.getValue(), e.getMessage());
-                node = strategySelector.buildNode(entity, order++);
+        // 1. 按 table 分组
+        Map<String, List<SemanticIR.Entity>> groupByTable = new LinkedHashMap<>();
+        List<SemanticIR.Entity> rootLevel = new ArrayList<>();
+
+        for (SemanticIR.Entity entity : ir.getEntities()) {
+            if (entity.getClauseType() == null) {
+                log.warn("Entity with unresolved clauseType: type={}, value={}, skipping", entity.getType(), entity.getValue());
+                continue;
             }
-            // entity 默认加到 must
-            root.addMust(node);
-        }
-
-        // 2. 时间约束
-        SemanticIR.TimeConstraint tc = ir.getTimeConstraint();
-        if (tc != null) {
-            QueryNode.RangeNode range = buildTimeRange(tc);
-            if (range != null) {
-                root.addFilter(range); // 时间范围用 filter（不影响评分）
+            String table = entity.getTable();
+            if (table != null && !table.isEmpty()) {
+                groupByTable.computeIfAbsent(table, k -> new ArrayList<>()).add(entity);
+            } else {
+                rootLevel.add(entity);
             }
         }
 
-        // 3. 处理 aggregation
+        // 2. 顶级 Entity（table = null）→ 直接挂在 root 下
+        for (SemanticIR.Entity entity : rootLevel) {
+            QueryNode node = buildClause(entity);
+            if (node != null) {
+                if ("range".equals(entity.getClauseType())) {
+                    root.addFilter(node);
+                } else {
+                    root.addMust(node);
+                }
+            }
+        }
+
+        // 3. 按表分组的 Entity → 每个分组创建一个 QueryNode.NestedNode
+        for (Map.Entry<String, List<SemanticIR.Entity>> entry : groupByTable.entrySet()) {
+            String table = entry.getKey();
+            List<SemanticIR.Entity> group = entry.getValue();
+
+            QueryNode.BoolNode inner = new QueryNode.BoolNode();
+            QueryNode.NestedNode nested = new QueryNode.NestedNode();
+            nested.setPath(table);
+            nested.setQuery(inner);
+
+            boolean hasRangeFilter = false;
+
+            for (SemanticIR.Entity entity : group) {
+                if ("range".equals(entity.getClauseType())) {
+                    // 时间 range → 注入 nested 内部的 filter
+                    QueryNode.RangeNode range = new QueryNode.RangeNode();
+                    range.setField(entity.getField());
+                    applyTimeValues(range, entity.getValue(), entity.getUnit());
+                    if (range.getGte() != null || range.getLte() != null
+                            || range.getGt() != null || range.getLt() != null) {
+                        inner.addFilter(range);
+                        hasRangeFilter = true;
+                    }
+                } else {
+                    // 非 range → 构建并加入 must
+                    QueryNode node = buildClause(entity);
+                    if (node != null) {
+                        inner.addMust(node);
+                    }
+                }
+            }
+
+            // range filter + exists 组合时打开 inner_hits
+            if (hasRangeFilter && nested.getInnerHitsSize() == 0) {
+                nested.setInnerHitsSize(10);
+            }
+
+            root.addMust(nested);
+        }
+
+        // 4. Aggregation
         QueryNode.AggregationNode aggNode = null;
         SemanticIR.Aggregation agg = ir.getAggregation();
         if (agg != null && "count".equals(agg.getType())) {
             aggNode = new QueryNode.AggregationNode();
             aggNode.setName("total");
-            aggNode.setField("_index"); // count all
+            aggNode.setField("_index");
         }
 
-        // 4. 构建最终容器
+        // 5. 构建容器
         QueryContainer container = new QueryContainer();
         container.setQuery(root.hasClauses() ? root : new QueryNode.BoolNode());
         container.setSize(ir.getLimit());
         container.setAggregation(aggNode);
-
         return container;
     }
 
-    /**
-     * 将时间约束转为 RangeNode。
-     * "最近30天" → binganshouye.admission_time gte now-30d/d
-     */
-    private QueryNode.RangeNode buildTimeRange(SemanticIR.TimeConstraint tc) {
-        if (tc == null) return null;
+    // ========================================================================
+    // 子句构建 — 纯机械 switch
+    // ========================================================================
 
-        QueryNode.RangeNode range = new QueryNode.RangeNode();
+    private QueryNode buildClause(SemanticIR.Entity entity) {
+        String clauseType = entity.getClauseType();
+        if (clauseType == null) return null;
 
-        // 目标字段：binganshouye.admission_time
-        SchemaField timeField = schema.getByFieldName("binganshouye.admission_time");
-        if (timeField == null) {
-            // fallback
-            timeField = schema.getByFieldName("patient.ini_time");
+        switch (clauseType) {
+            case "term":
+                return new QueryNode.TermNode(entity.getField(), entity.getValue());
+
+            case "match_phrase":
+                return new QueryNode.MatchPhraseNode(entity.getField(), entity.getValue());
+
+            case "exists":
+                QueryNode.ExistsNode exists = new QueryNode.ExistsNode();
+                exists.setField(entity.getField());
+                return exists;
+
+            case "range":
+                // 时间 range（顶级情况，table=null）
+                QueryNode.RangeNode range = new QueryNode.RangeNode();
+                range.setField(entity.getField());
+                applyTimeValues(range, entity.getValue(), entity.getUnit());
+                return range;
+
+            default:
+                log.warn("Unknown clauseType '{}', treating as match_phrase", clauseType);
+                return new QueryNode.MatchPhraseNode("total_src", entity.getValue());
         }
-        range.setField(timeField != null ? timeField.getEsPath() : "binganshouye.admission_time");
-
-        if ("relative".equals(tc.getType())) {
-            // "最近30天" → now-30d/d
-            String unit = "d";
-            if ("month".equals(tc.getUnit())) unit = "M";
-            else if ("year".equals(tc.getUnit())) unit = "y";
-            range.setGte("now-" + tc.getValue() + unit + "/d");
-        } else if ("absolute".equals(tc.getType())) {
-            if (tc.getStartDate() != null) range.setGte(tc.getStartDate());
-            if (tc.getEndDate() != null) range.setLte(tc.getEndDate());
-        }
-
-        return range;
     }
 
+    // ========================================================================
+    // 时间值处理 — 纯值转换，无决策
+    // ========================================================================
+
     /**
-     * AST 查询容器。
-     * 包含 query、size、sort、aggregation 等顶级元素。
+     * 将 time entity 的 value+unit 转换为 ES range 的 gte/lte。
      */
+    private void applyTimeValues(QueryNode.RangeNode range, String value, String unit) {
+        if (value == null) return;
+
+        // 尝试解析为数字（相对时间）
+        try {
+            int num = Integer.parseInt(value);
+            String u = "d";
+            if ("month".equals(unit)) u = "M";
+            else if ("year".equals(unit)) u = "y";
+            range.setGte("now-" + num + u + "/d");
+            return;
+        } catch (NumberFormatException ignored) {
+            // 不是数字，可能是绝对时间
+        }
+
+        // 绝对时间格式
+        range.setGte(value);
+    }
+
+    // ========================================================================
+    // QueryContainer
+    // ========================================================================
+
     public static class QueryContainer {
         private QueryNode query;
         private int size = 20;
@@ -130,13 +188,10 @@ public class ASTBuilder {
 
         public QueryNode getQuery() { return query; }
         public void setQuery(QueryNode q) { this.query = q; }
-
         public int getSize() { return size; }
         public void setSize(int size) { this.size = size; }
-
         public QueryNode.AggregationNode getAggregation() { return aggregation; }
         public void setAggregation(QueryNode.AggregationNode agg) { this.aggregation = agg; }
-
         public QueryNode.SortNode getSort() { return sort; }
         public void setSort(QueryNode.SortNode sort) { this.sort = sort; }
     }

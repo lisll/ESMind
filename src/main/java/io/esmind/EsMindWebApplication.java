@@ -1,38 +1,47 @@
 package io.esmind;
 
-import io.esmind.agent.EsTool;
-import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.model.Model;
-import io.agentscope.core.model.OpenAIChatModel;
-import io.agentscope.core.tool.Toolkit;
-import io.agentscope.harness.agent.HarnessAgent;
-import io.agentscope.harness.agent.memory.compaction.CompactionConfig;
+import io.esmind.ast.ASTBuilder;
+import io.esmind.compiler.EsRestClient;
+import io.esmind.compiler.SchemaLoader;
+import io.esmind.compiler.SchemaRegistry;
+import io.esmind.renderer.DSLRenderer;
+import io.esmind.renderer.ResultTransformer;
+import io.esmind.semantic.SemanticParser;
+import io.esmind.template.TemplateEngine;
+import io.esmind.validator.QueryValidator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Primary;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Properties;
 
 /**
- * Spring Boot entry point for ESMind Web Interface.
- * Initialises the {@link HarnessAgent} as a Spring bean and exposes
- * REST endpoints for NL → ES query interactions.
+ * ESMind Web Application (v2 Compiler).
+ *
+ * <p>Bypasses HarnessAgent entirely. The query pipeline:
+ * <pre>
+ *   NL Query → SemanticParser (entity extraction, 500 tokens max)
+ *           → ASTBuilder (TemplateEngine + StrategySelector)
+ *           → DSLRenderer (AST → ES DSL JSON)
+ *           → EsRestClient (execute against ES)
+ *           → ResultTransformer (format for display)
+ * </pre>
+ *
+ * <p>Total latency: ~3-5 seconds per query (not 73+ seconds like v1 HarnessAgent).
  */
 @SpringBootApplication
 public class EsMindWebApplication {
 
-    public static void main(String[] args) {
-        SpringApplication.run(EsMindWebApplication.class, args);
-    }
+    private static final Logger log = LoggerFactory.getLogger(EsMindWebApplication.class);
 
     // -------------------------------------------------------------------------
-    // Property keys (same as EsMindAgent)
+    // Property keys
     // -------------------------------------------------------------------------
     static final String PROP_BASE_URL = "esmind.model.base-url";
     static final String PROP_API_KEY = "esmind.model.api-key";
@@ -40,113 +49,115 @@ public class EsMindWebApplication {
     static final String PROP_ES_HOST = "esmind.es.host";
     static final String PROP_ES_PORT = "esmind.es.port";
     static final String PROP_ES_SCHEME = "esmind.es.scheme";
-    static final String PROP_ES_USER = "esmind.es.username";
-    static final String PROP_ES_PASS = "esmind.es.password";
-    static final String PROP_WORKSPACE = "esmind.workspace";
-    static final String PROP_SERVER_PORT = "server.port";
+    static final String PROP_ES_INDEX = "esmind.es.index";
+    static final String PROP_CACHE_PATH = "esmind.schema.cache-path";
 
     static final String ENV_API_KEY = "DASHSCOPE_API_KEY";
-    static final String ENV_MODEL = "AGENTSCOPE_MODEL";
     static final String ENV_ES_HOST = "ES_HOST";
     static final String ENV_ES_PORT = "ES_PORT";
-    static final String ENV_ES_SCHEME = "ES_SCHEME";
-    static final String ENV_WORKSPACE = "AGENTSCOPE_WORKSPACE";
 
-    static final String DEFAULT_MODEL = "qwen-max";
-    static final String DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/api/v1";
-    static final String DEFAULT_WORKSPACE = ".agentscope/workspace";
+    static final String DEFAULT_BASE_URL = "https://api.deepseek.com";
+    static final String DEFAULT_MODEL = "deepseek-chat";
     static final String DEFAULT_ES_HOST = "localhost";
     static final int DEFAULT_ES_PORT = 9200;
     static final String DEFAULT_ES_SCHEME = "http";
-    static final int DEFAULT_SERVER_PORT = 8090;
+    static final String DEFAULT_CACHE = "data/schema-cache.json";
+
+    public static void main(String[] args) {
+        SpringApplication.run(EsMindWebApplication.class, args);
+    }
 
     // -------------------------------------------------------------------------
-    // Spring Configuration — build shared beans
+    // Spring Configuration — v2 Compiler beans
     // -------------------------------------------------------------------------
 
     @Configuration
-    static class AgentConfig {
+    static class CompilerConfig {
 
         @Bean
-        @Primary
         Properties esmindProperties() throws IOException {
             return loadProperties();
         }
 
+        /**
+         * Elasticsearch REST Client (lightweight, no AgentScope dependency).
+         */
         @Bean
-        EsTool esTool(Properties props) throws IOException {
-            String esHost = resolveOverride(props.getProperty(PROP_ES_HOST, DEFAULT_ES_HOST), ENV_ES_HOST);
-            int esPort = Integer.parseInt(resolveOverride(
+        EsRestClient esRestClient(@Qualifier("esmindProperties") Properties props) {
+            String host = resolveOverride(props.getProperty(PROP_ES_HOST, DEFAULT_ES_HOST), ENV_ES_HOST);
+            int port = Integer.parseInt(resolveOverride(
                     props.getProperty(PROP_ES_PORT, String.valueOf(DEFAULT_ES_PORT)), ENV_ES_PORT));
-            String esScheme = resolveOverride(props.getProperty(PROP_ES_SCHEME, DEFAULT_ES_SCHEME), ENV_ES_SCHEME);
-            String esUsername = props.getProperty(PROP_ES_USER, "");
-            String esPassword = props.getProperty(PROP_ES_PASS, "");
-            return new EsTool(esHost, esPort, esScheme, esUsername, esPassword);
+            String scheme = props.getProperty(PROP_ES_SCHEME, DEFAULT_ES_SCHEME);
+            EsRestClient client = new EsRestClient(host, port, scheme);
+            log.info("EsRestClient initialized: {}://{}:{}", scheme, host, port);
+            return client;
         }
 
+        /**
+         * SchemaRegistry — loads ES mapping (from cache or live), serves field metadata.
+         * SchemaLoader.load() handles caching internally.
+         */
         @Bean
-        Model esmindModel(Properties props) {
+        SchemaRegistry schemaRegistry(EsRestClient esClient, @Qualifier("esmindProperties") Properties props) throws Exception {
+            String indexName = props.getProperty(PROP_ES_INDEX);
+            if (indexName == null || indexName.isBlank()) {
+                throw new IllegalStateException("esmind.es.index must be set in application.properties");
+            }
+            SchemaRegistry registry = new SchemaLoader(indexName, esClient).load();
+            log.info("SchemaRegistry ready: {} fields, {} nested tables",
+                    registry.size(), registry.getNestedPaths().size());
+            return registry;
+        }
+
+        /**
+         * SemanticParser — small LLM call (500 max tokens) for entity extraction.
+         * Only extracts intent + entity type/value — NO ES DSL generation.
+         */
+        @Bean
+        SemanticParser semanticParser(@Qualifier("esmindProperties") Properties props) {
             String baseUrl = props.getProperty(PROP_BASE_URL, DEFAULT_BASE_URL);
             String apiKey = resolveSecret(props.getProperty(PROP_API_KEY, ""), ENV_API_KEY);
-            String modelName = resolveOverride(props.getProperty(PROP_MODEL, DEFAULT_MODEL), ENV_MODEL);
-            return OpenAIChatModel.builder()
-                    .baseUrl(baseUrl)
-                    .apiKey(apiKey)
-                    .modelName(modelName)
-                    .stream(false)
-                    .build();
+            String modelName = props.getProperty(PROP_MODEL, DEFAULT_MODEL);
+            log.info("SemanticParser initialized: model={} @ {}", modelName, baseUrl);
+            return new SemanticParser(baseUrl, apiKey, modelName);
         }
 
         @Bean
-        Path workspacePath(Properties props) {
-            return Paths.get(resolveOverride(
-                    props.getProperty(PROP_WORKSPACE, DEFAULT_WORKSPACE), ENV_WORKSPACE));
+        TemplateEngine queryTemplateEngine() {
+            return new TemplateEngine();
         }
 
         @Bean
-        HarnessAgent esmindAgent(Model esmindModel, EsTool esTool, Path workspacePath) {
-            Toolkit toolkit = new Toolkit();
-            toolkit.registerTool(esTool);
-
-            HarnessAgent agent = HarnessAgent.builder()
-                    .name("esmind")
-                    .sysPrompt("You are an Elasticsearch query expert. Translate natural language"
-                            + " questions into Elasticsearch DSL queries, execute them, and present"
-                            + " results clearly. The index structure is already documented in"
-                            + " workspace/knowledge/ - use KNOWLEDGE.md and NEUROLOGY_SPEC_2025.md"
-                            + " for field paths and query templates. Only call es_get_mapping if"
-                            + " the user asks about an index whose structure you cannot find in"
-                            + " the knowledge files. Execute each query once and present the results;"
-                            + " do not rerun unless the query failed."
-                            + " IMPORTANT: Be decisive. Once you have a working query that returns"
-                            + " meaningful results, present them and STOP. Do NOT refine or re-execute"
-                            + " unless the first query failed. Execute each query once.")
-                    .model(esmindModel)
-                    .workspace(workspacePath)
-                    .toolkit(toolkit)
-                    .compaction(CompactionConfig.builder()
-                            .triggerMessages(30)
-                            .keepMessages(10)
-                            .flushBeforeCompact(true)
-                            .build())
-                    .enableAgentTracingLog(true)
-                    .build();
-
-            System.out.println("[web] HarnessAgent 'esmind' built [workspace="
-                    + workspacePath.toAbsolutePath() + "]");
-            return agent;
+        ASTBuilder astBuilder() {
+            return new ASTBuilder();
         }
 
         @Bean
-        RuntimeContext defaultRuntimeContext() {
-            return RuntimeContext.builder()
-                    .sessionId("esmind-web")
-                    .build();
+        DSLRenderer dslRenderer() {
+            return new DSLRenderer();
+        }
+
+        @Bean
+        QueryValidator queryValidator(SchemaRegistry schema) {
+            return new QueryValidator(schema);
+        }
+
+        @Bean
+        ResultTransformer resultTransformer() {
+            return new ResultTransformer();
+        }
+
+        /**
+         * The index name used for all queries.
+         */
+        @Bean
+        String esmindIndexName(@Qualifier("esmindProperties") Properties props) {
+            return props.getProperty(PROP_ES_INDEX);
         }
     }
 
     // -------------------------------------------------------------------------
-    // Utility methods (shared with EsMindAgent)
+    // Utility methods
     // -------------------------------------------------------------------------
 
     static Properties loadProperties() throws IOException {

@@ -1,48 +1,55 @@
 package io.esmind.web;
 
-import io.esmind.agent.EsTool;
-import io.agentscope.core.agent.RuntimeContext;
-import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.MsgRole;
-import io.agentscope.harness.agent.HarnessAgent;
+import io.esmind.agent.EsMindCompiler;
+import io.esmind.ast.ASTBuilder;
+import io.esmind.compiler.EsRestClient;
+import io.esmind.compiler.SchemaRegistry;
+import io.esmind.renderer.DSLRenderer;
+import io.esmind.renderer.ResultTransformer;
+import io.esmind.semantic.SemanticParser;
+import io.esmind.template.TemplateEngine;
+import io.esmind.validator.QueryValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
-/**
- * REST controller for the ESMind chat interface.
- *
- * <p>Serves the frontend HTML page and handles NL → ES query requests.</p>
- */
 @Controller
 public class ChatController {
 
     private static final Logger log = LoggerFactory.getLogger(ChatController.class);
 
-    @Autowired
-    private HarnessAgent agent;
+    private final EsMindCompiler compiler;
 
-    @Autowired
-    private RuntimeContext ctx;
-
-    // -------------------------------------------------------------------------
-    // Serve the frontend page
-    // -------------------------------------------------------------------------
+    public ChatController(SchemaRegistry schemaRegistry,
+                          SemanticParser semanticParser,
+                          TemplateEngine templateEngine,
+                          ASTBuilder astBuilder,
+                          DSLRenderer dslRenderer,
+                          QueryValidator queryValidator,
+                          EsRestClient esRestClient,
+                          ResultTransformer resultTransformer,
+                          String indexName) {
+        this.compiler = new EsMindCompiler(
+                semanticParser, templateEngine,
+                dslRenderer, queryValidator,
+                esRestClient, resultTransformer,
+                indexName
+        );
+        log.info("ChatController initialized with v2 Compiler: index={}", indexName);
+    }
 
     @GetMapping("/")
     public String index() {
         return "index";
     }
-
-    // -------------------------------------------------------------------------
-    // Chat API — basic (returns only the agent's response text)
-    // -------------------------------------------------------------------------
 
     @PostMapping(value = "/api/chat", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> request) {
@@ -51,49 +58,26 @@ public class ChatController {
             return ResponseEntity.badRequest().body(Map.of("error", "question is required"));
         }
 
-        long startTime = System.currentTimeMillis();
         log.info("[chat] User question: {}", question);
+        EsMindCompiler.QueryResponse response = compiler.compile(question);
 
-        try {
-            Msg result = agent.call(
-                    Msg.builder().role(MsgRole.USER).textContent(question).build(),
-                    ctx
-            ).block(java.time.Duration.ofSeconds(600));
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("answer", response.getAnswer() != null ? response.getAnswer() : "(no response)");
+        result.put("elapsed_ms", response.getTotalElapsedMs());
 
-            long elapsed = System.currentTimeMillis() - startTime;
-
-            if (result == null) {
-                return ResponseEntity.ok(Map.of(
-                        "answer", "抱歉，Agent 未返回有效响应。",
-                        "elapsed_ms", elapsed
-                ));
+        if (response.getError() != null) {
+            result.put("error", response.getError());
+            if (response.getDsl() != null && !response.getDsl().isEmpty()) {
+                result.put("dsl", response.getDsl());
             }
-
-            String text = result.getTextContent();
-            if (text == null || text.isBlank()) {
-                text = "(Agent returned empty response)";
+            if (!response.getDebugInfo().isEmpty()) {
+                result.put("debug", response.getDebugInfo());
             }
-
-            log.info("[chat] Response in {}ms for: {}", elapsed, question);
-            return ResponseEntity.ok(Map.of(
-                    "answer", text,
-                    "elapsed_ms", elapsed
-            ));
-
-        } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("[chat] Error: {} ({}ms)", question, elapsed, e);
-            return ResponseEntity.ok(Map.of(
-                    "answer", "处理查询时出错: " + e.getMessage(),
-                    "error", e.getClass().getSimpleName(),
-                    "elapsed_ms", elapsed
-            ));
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Chat API — detail (returns DSL + ES result + AI explanation)
-    // -------------------------------------------------------------------------
+        log.info("[chat] Response in {}ms for: {}", response.getTotalElapsedMs(), question);
+        return ResponseEntity.ok(result);
+    }
 
     @PostMapping(value = "/api/chat/detail", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<Map<String, Object>> chatDetail(@RequestBody Map<String, String> request) {
@@ -102,74 +86,41 @@ public class ChatController {
             return ResponseEntity.badRequest().body(Map.of("error", "question is required"));
         }
 
-        long startTime = System.currentTimeMillis();
         log.info("[chat/detail] User question: {}", question);
+        EsMindCompiler.QueryResponse response = compiler.compile(question);
 
-        // Clear previous captured data
-        EsTool.clearLastQuery();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("answer", response.getAnswer() != null ? response.getAnswer() : "(no response)");
+        result.put("dsl", response.getDsl() != null ? response.getDsl() : "");
+        result.put("es_result", response.getEsRawResult() != null ? response.getEsRawResult() : "");
+        result.put("elapsed_ms", response.getTotalElapsedMs());
 
-        // Create a fresh session context so agent doesn't reuse history
-        String freshSessionId = "esmind-" + UUID.randomUUID().toString().substring(0, 8);
-        RuntimeContext freshCtx = RuntimeContext.builder()
-                .sessionId(freshSessionId)
-                .build();
+        boolean hasDetail = response.getDsl() != null && !response.getDsl().isEmpty()
+                && response.getEsRawResult() != null && !response.getEsRawResult().isEmpty();
+        result.put("has_detail", hasDetail);
 
-        try {
-            Msg result = agent.call(
-                    Msg.builder().role(MsgRole.USER).textContent(question).build(),
-                    freshCtx
-            ).block(java.time.Duration.ofSeconds(600));
-
-            long elapsed = System.currentTimeMillis() - startTime;
-
-            if (result == null) {
-                return ResponseEntity.ok(Map.of(
-                        "answer", "抱歉，Agent 未返回有效响应。",
-                        "elapsed_ms", elapsed
-                ));
-            }
-
-            String text = result.getTextContent();
-            if (text == null || text.isBlank()) {
-                text = "(Agent returned empty response)";
-            }
-
-            // Retrieve captured DSL and ES result
-            String dsl = EsTool.getLastQueryDsl();
-            String esResult = EsTool.getLastQueryResult();
-
-            Map<String, Object> response = new LinkedHashMap<>();
-            response.put("answer", text);
-            response.put("dsl", dsl);
-            response.put("es_result", esResult);
-            response.put("elapsed_ms", elapsed);
-            response.put("has_detail", !dsl.isEmpty() && !esResult.isEmpty());
-
-            log.info("[chat/detail] Response in {}ms (has_detail={}) for: {}",
-                    elapsed, !dsl.isEmpty(), question);
-            return ResponseEntity.ok(response);
-
-        } catch (Exception e) {
-            long elapsed = System.currentTimeMillis() - startTime;
-            log.error("[chat/detail] Error: {} ({}ms)", question, elapsed, e);
-            return ResponseEntity.ok(Map.of(
-                    "answer", "处理查询时出错: " + e.getMessage(),
-                    "error", e.getClass().getSimpleName(),
-                    "elapsed_ms", elapsed
-            ));
+        if (response.getError() != null) {
+            result.put("error", response.getError());
         }
-    }
 
-    // -------------------------------------------------------------------------
-    // Health check
-    // -------------------------------------------------------------------------
+        if (response.getMarkdownTable() != null && !response.getMarkdownTable().isEmpty()) {
+            String answer = (String) result.get("answer");
+            if (answer != null && !answer.contains("|")) {
+                result.put("answer", answer + "\n\n" + response.getMarkdownTable());
+            }
+        }
+
+        log.info("[chat/detail] Response in {}ms (has_detail={}) for: {}",
+                response.getTotalElapsedMs(), hasDetail, question);
+        return ResponseEntity.ok(result);
+    }
 
     @GetMapping("/api/health")
     public ResponseEntity<Map<String, Object>> health() {
         return ResponseEntity.ok(Map.of(
                 "status", "ok",
-                "agent", "esmind",
-                "session", ctx.getSessionId()
+                "mode", "v2-compiler",
+                "index", compiler != null ? "configured" : "unknown"
         ));
     }
 }

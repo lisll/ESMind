@@ -1,86 +1,104 @@
-# ESMind — 自然语言查询 Elasticsearch
+# ESMind — 高性能医疗 Elasticsearch Query Compiler
 
-基于 AgentScope Java Harness Framework 构建的 AI Agent，将自然语言问题转换为 Elasticsearch 查询 DSL 并返回结构化结果。
+将自然语言医疗查询编译为 Elasticsearch DSL 并返回结构化结果。  
+不依赖 LLM 推理生成 DSL，采用 **SemanticIR** 作为唯一内部查询语言，通过 Resolution → ASTBuilder → DSLRenderer 的编译管线执行。
 
-## 架构
+## 架构总览
 
 ```
-用户提问（自然语言）
-    ↓
-┌─ HarnessAgent ─────────────────────────────────┐
-│  Workspace: AGENTS.md + knowledge + skills     │
-│  + Memory + Session + Subagent orchestration   │
-│          ↓                                     │
-│  ReAct Loop (Reasoning → Tool Call)            │
-│          ↓                                     │
-│  EsTool: 查询 ES 的工具层                      │
-└────────────────────────────────────────────────┘
-    ↓
-ES 查询结果 + NL 解释
+用户输入 (NL)
+    │
+    ├─── FastPath (QueryDictionary, <100ms)
+    │         ↓
+    └─── SlowPath (LLM Entity Extraction, 3-5s)
+              ↓
+     SemanticIR（唯一内部查询语言）
+         │ Entity: type + value + clauseType + table + field
+         ↓
+    Resolution（TemplateEngine.resolve）
+         │ 填充编译字段：clauseType/table/field/keyword
+         ↓
+    ASTBuilder（无状态，纯机械转换）
+         │ 按 table 分组 → BoolNode + NestedNode
+         ↓
+    DSLRenderer → JSON DSL
+         ↓
+    ES Client → 执行 → ResultTransformer
 ```
 
-## 版本兼容性
+## 核心组件
 
-| ES 版本 | 支持状态 | 说明 |
-|---------|---------|------|
-| 5.x | ⚠️ 基本支持 | REST API 兼容，未充分测试 |
-| **6.x** | ✅ **完全支持** | mapping type 包裹、total hits 数字格式已适配 |
-| **7.x** | ✅ **完全支持** | 原生 REST API |
-| **8.x** | ✅ **完全支持** | REST API 兼容 |
+| 组件 | 路径 | 职责 |
+|------|------|------|
+| `SemanticIR` | `semantic/` | 唯一内部查询语言。Entity 自包含语义+编译两层字段 |
+| `SemanticParser` | `semantic/` | LLM 调用，实体抽取。输出 SemanticIR（仅语义层字段） |
+| `TemplateEngine` | `template/` | Resolution 阶段：补全 Entity 编译字段。含 TABLE_TIME_FIELDS 映射 |
+| `ASTBuilder` | `ast/` | 纯机械转换，无业务逻辑。按 table 分组构建 NestedNode |
+| `DSLRenderer` | `renderer/` | AST → JSON DSL，无状态 |
+| `QueryValidator` | `validator/` | DSL 合法性校验 |
+| `QueryDictionary` | `normalizer/` | FastPath 规则词典（待实现） |
+| `EsRestClient` | `compiler/` | ES HTTP 通信 |
+| `SchemaRegistry` | `compiler/` | ES mapping 加载 + 缓存 |
+| `ResultTransformer` | `renderer/` | ES 结果 → Markdown 表格 |
 
-**实现方式**：使用 Elasticsearch Low-Level REST Client（`elasticsearch-rest-client`）直接发送 HTTP 请求，通过 Jackson 解析 JSON 响应。启动时自动检测 ES 版本号并差异化处理：
+## SemanticIR 数据结构
 
-- **Mapping 结构差异**：6.x 的 mapping 返回 `{"mappings": {"_doc": {"properties": {...}}}}`（type 包裹），7.x+ 返回 `{"mappings": {"properties": {...}}}`（扁平结构）——自动适配
-- **Total hits 格式差异**：6.x 返回纯数字 `{"total": 42}`，7.x+ 返回对象 `{"total": {"value": 42, "relation": "eq"}}`——自动识别
-- **索引列举**：统一使用 `_cat/indices?format=json`
+```json
+{
+  "version": 1,
+  "intent": "patient_search",
+  "entities": [
+    {
+      // 语义层（解析器输出）
+      "type": "disease",
+      "value": "高血压",
+      // 编译层（Resolution 填充）
+      "clauseType": "match_phrase",
+      "table": "shouyezhenduan",
+      "field": "shouyezhenduan.diagnosis_name",
+      "keyword": "shouyezhenduan.norm_diagnosis_name",
+      "useSynonyms": true
+    },
+    {
+      "type": "time",
+      "value": "7",
+      "unit": "day",
+      "clauseType": "range",
+      "table": "shouyezhenduan",
+      "field": "shouyezhenduan.diagnosis_time"
+    }
+  ],
+  "limit": 20
+}
+```
 
-> 💡 底层不依赖 `RestHighLevelClient`，因此不存在 ES 客户端版本绑定问题。
+## 编译管线
+
+```
+LLM Path:  NL → SemanticParser(LLM) → SemanticIR(部分) → TemplateEngine.resolve → SemanticIR(完整) → ASTBuilder → DSL
+FastPath:  NL → QueryDictionary → SemanticIR(完整) → ASTBuilder → DSL
+```
+
+## 时间字段映射
+
+23 个业务表的时间字段在 `TemplateEngine.TABLE_TIME_FIELDS` 中定义。  
+Resolution 阶段根据查询涉及的 nested 表自动注入对应的时间字段。  
+详见 `esmind-table-time-fields` skill。
 
 ## 快速开始
 
-### 前置条件
-
-- JDK 17+
-- Maven 3.8+
-- 可访问的 Elasticsearch 实例（**6.x ~ 8.x**，启动时自动检测版本）
-
-### 配置
-
 ```bash
-cp .env.example .env
-# 编辑 .env，填入 DASHSCOPE_API_KEY 和 ES 连接信息
+# 运行 Spring Boot 服务
+mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8090"
+
+# 查询测试
+curl -X POST http://localhost:8090/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"question":"高血压患者近150天有手术且近120天有检验报告"}'
 ```
 
-### 运行
+## 索引信息
 
-```bash
-# 交互式模式
-mvn compile exec:java \
-  -Dexec.mainClass="io.esmind.agent.EsMindAgent"
-
-# 单次查询
-mvn compile exec:java \
-  -Dexec.mainClass="io.esmind.agent.EsMindAgent" \
-  -Dexec.args="上个月销售额最高的产品是什么？"
-```
-
-## 工作区结构
-
-```
-.agentscope/workspace/
-├── AGENTS.md           ← Agent 人格与行为约定
-├── MEMORY.md           ← 自动沉淀的长期记忆
-├── knowledge/
-│   └── KNOWLEDGE.md    ← ES 集群索引映射参考
-├── skills/
-│   ├── query-writing/   ← 如何构建 ES 查询
-│   ├── schema-exploration/  ← 如何发现索引结构
-│   └── query-debugging/ ← 如何调试查询问题
-└── subagents/
-    ├── dsl-writer.md    ← 专职 DSL 生成的子 Agent
-    └── result-analyzer.md  ← 专职结果分析的子 Agent
-```
-
-## License
-
-Apache 2.0
+- 索引: `history2026_clinical_inhistory_0429122358` (ES 6.5.4)
+- 文档数: 38,515
+- 主要 nested 表: jianyanbaogaofu(检验)、shouyezhenduan(诊断)、menzhenxiyichufang(处方)、shoushujilu(手术)、binglizhenduan(病理)

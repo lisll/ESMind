@@ -1,10 +1,10 @@
 {
-  "version": "1.0",
+  "version": "2.0",
   "templates": [
     {
-      "name": "diagnosis_match",
-      "description": "诊断匹配（nested + match_phrase）",
-      "entity_types": ["disease"],
+      "name": "diagnosis_inpatient",
+      "description": "住院诊断匹配（shouyezhenduan nested + match_phrase）",
+      "entityTypes": ["disease", "diagnosis"],
       "parameters": [
         {"name": "value", "type": "string", "description": "诊断名称"}
       ],
@@ -12,56 +12,86 @@
         "type": "nested_match",
         "table": "shouyezhenduan",
         "field": "shouyezhenduan.diagnosis_name",
-        "keyword": "shouyezhenduan.diagnosis_name.accurate",
-        "use_synonyms": true
+        "keyword": "shouyezhenduan.norm_diagnosis_name",
+        "useSynonyms": true
+      }
+    },
+    {
+      "name": "diagnosis_outpatient",
+      "description": "门诊诊断匹配（menzhenshuju.diagnosis_name 双层 nested + match_phrase）",
+      "entityTypes": ["disease", "diagnosis"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "诊断名称"}
+      ],
+      "strategy": {
+        "type": "nested_match",
+        "table": "menzhenshuju.diagnosis_name",
+        "field": "menzhenshuju.diagnosis_name.diagnosis_name",
+        "keyword": "menzhenshuju.diagnosis_name.diagnosis_name",
+        "useSynonyms": true
       }
     },
     {
       "name": "lab_test_by_name",
-      "description": "检验项目名称匹配（nested + term）",
-      "entity_types": ["lab_item"],
+      "description": "检验项目名称匹配（jianyanbaogaofu nested + match_phrase）",
+      "entityTypes": ["lab_item"],
       "parameters": [
         {"name": "value", "type": "string", "description": "检验项名称，如白细胞计数"},
         {"name": "operator", "type": "string", "optional": true, "description": "比较操作符 gt/gte/lt/lte/eq"},
         {"name": "numericValue", "type": "string", "optional": true, "description": "数值比较目标值"}
       ],
       "strategy": {
-        "type": "nested_term",
+        "type": "nested_match",
         "table": "jianyanbaogaofu",
-        "field": "jianyanbaogaofu.lab_sub_item_name",
-        "keyword": "jianyanbaogaofu.lab_sub_item_name.accurate",
-        "value_field": "jianyanbaogaofu.lab_sub_item_result"
+        "field": "jianyanbaogaofu.norm_lab_item_name",
+        "keyword": "jianyanbaogaofu.lab_item_name",
+        "valueField": "jianyanbaogaofu.lab_test_value",
+        "useSynonyms": true
       }
     },
     {
       "name": "department_match",
-      "description": "科室名称精确匹配（term）",
-      "entity_types": ["department"],
+      "description": "科室名称匹配（menzhenjiuzhenjilu.visit_dept_name match_phrase）",
+      "entityTypes": ["department"],
       "parameters": [
         {"name": "value", "type": "string", "description": "科室名称"}
       ],
       "strategy": {
-        "type": "term",
-        "field": "patient.dept.dept_name",
-        "keyword": "patient.dept.dept_name.keyword"
+        "type": "match_phrase",
+        "field": "menzhenjiuzhenjilu.visit_dept_name"
       }
     },
     {
       "name": "patient_id_lookup",
-      "description": "患者ID精确查询（term）",
-      "entity_types": ["patient_id"],
+      "description": "患者ID精确查询（patient.patient_id match_phrase，覆盖门诊+住院）",
+      "entityTypes": ["patient_id"],
       "parameters": [
         {"name": "value", "type": "string", "description": "患者ID"}
       ],
       "strategy": {
-        "type": "term",
+        "type": "match_phrase",
         "field": "patient.patient_id"
       }
     },
     {
+      "name": "medicine_prescription",
+      "description": "门诊处方药品查询（menzhenxiyichufang nested + match_phrase）",
+      "entityTypes": ["medicine"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "药品名称"}
+      ],
+      "strategy": {
+        "type": "nested_match",
+        "table": "menzhenxiyichufang",
+        "field": "menzhenxiyichufang.order_item_name",
+        "keyword": "menzhenxiyichufang.order_item_name",
+        "useSynonyms": false
+      }
+    },
+    {
       "name": "symptom_search",
-      "description": "症状/主诉全文搜索（match_phrase）",
-      "entity_types": ["symptom"],
+      "description": "症状/主诉全文搜索（total_src match_phrase）",
+      "entityTypes": ["symptom"],
       "parameters": [
         {"name": "value", "type": "string", "description": "症状描述"}
       ],
@@ -71,70 +101,65 @@
       }
     },
     {
-      "name": "medicine_order",
-      "description": "医嘱用药查询（nested + term）",
-      "entity_types": ["medicine"],
-      "parameters": [
-        {"name": "value", "type": "string", "description": "药品名称"}
-      ],
-      "strategy": {
-        "type": "nested_term",
-        "table": "yizhu",
-        "field": "yizhu.order_item_name",
-        "keyword": "yizhu.order_item_name.keyword"
-      }
-    },
-    {
       "name": "time_range_relative",
-      "description": "相对时间范围（range）",
-      "entity_types": [],
+      "description": "相对时间范围（range on menzhenjiuzhenjilu.visit_time）",
+      "entityTypes": [],
       "parameters": [
         {"name": "value", "type": "integer", "description": "时间数值"},
         {"name": "unit", "type": "string", "description": "单位: day/month/year"}
       ],
       "strategy": {
         "type": "range",
-        "field": "binganshouye.admission_time",
-        "date_format": "now-{value}{unit}/d"
+        "field": "menzhenjiuzhenjilu.visit_time",
+        "dateFormat": "now-{value}{unit}/d"
       }
     },
     {
-      "name": "exam_by_name",
-      "description": "检查项目名称匹配（nested + match_phrase）",
-      "entity_types": ["exam_item"],
+      "name": "patient_name_search",
+      "description": "患者姓名查询（menzhenjiuzhenjilu.name 精确匹配）",
+      "entityTypes": ["patient_name"],
       "parameters": [
-        {"name": "value", "type": "string", "description": "检查项目名称，如头颅MR"}
+        {"name": "value", "type": "string", "description": "患者姓名"}
       ],
       "strategy": {
-        "type": "nested_match",
-        "table": "jianchabaogaofu",
-        "field": "jianchabaogaofu.exam_item_name",
-        "keyword": "jianchabaogaofu.exam_item_name.accurate",
-        "use_synonyms": false
+        "type": "match_phrase",
+        "field": "menzhenjiuzhenjilu.name"
       }
     },
     {
-      "name": "surgery_lookup",
-      "description": "手术查询（nested + match_phrase）",
-      "entity_types": ["surgery"],
+      "name": "visit_type_filter",
+      "description": "就诊类型过滤（门诊/住院/急诊）",
+      "entityTypes": ["visit_type"],
       "parameters": [
-        {"name": "value", "type": "string", "description": "手术名称"}
+        {"name": "value", "type": "string", "description": "就诊类型: 门诊/住院/急诊"}
       ],
       "strategy": {
-        "type": "nested_match",
-        "table": "shoushu",
-        "field": "shoushu.surgery_name",
-        "keyword": "shoushu.surgery_name.keyword",
-        "use_synonyms": false
+        "type": "term",
+        "field": "menzhenjiuzhenjilu.visit_type_name"
       }
     },
     {
-      "name": "multi_condition_bool",
-      "description": "多条件组合查询（bool + must）",
-      "entity_types": [],
-      "parameters": [],
+      "name": "lab_report_exists",
+      "description": "有检验报告的患者（exists on jianyanbaogaofu）",
+      "entityTypes": ["report_type"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "报告类型: lab/检验报告"}
+      ],
       "strategy": {
-        "type": "bool_combine"
+        "type": "exists",
+        "field": "jianyanbaogaofu"
+      }
+    },
+    {
+      "name": "surgery_exists",
+      "description": "有手术记录的患者（exists on shoushujilu）",
+      "entityTypes": ["report_type"],
+      "parameters": [
+        {"name": "value", "type": "string", "description": "报告类型: surgery/手术"}
+      ],
+      "strategy": {
+        "type": "exists",
+        "field": "shoushujilu"
       }
     }
   ]
