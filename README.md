@@ -1,5 +1,7 @@
 # ESMind — 高性能医疗 Elasticsearch Query Compiler
 
+> 最后更新：2026-05-28
+
 将自然语言医疗查询编译为 Elasticsearch DSL 并返回结构化结果。  
 不依赖 LLM 推理生成 DSL，采用 **SemanticIR** 作为唯一内部查询语言，通过 Resolution → ASTBuilder → DSLRenderer 的编译管线执行。
 
