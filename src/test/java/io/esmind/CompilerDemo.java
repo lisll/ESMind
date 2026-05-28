@@ -12,9 +12,6 @@ import io.esmind.compiler.SchemaRegistry;
 import io.esmind.renderer.DSLRenderer;
 import io.esmind.renderer.ResultTransformer;
 import io.esmind.semantic.SemanticIR;
-import io.esmind.semantic.SemanticParser;
-import io.esmind.strategy.StrategySelector;
-import io.esmind.template.TemplateEngine;
 import io.esmind.validator.QueryValidator;
 
 /**
@@ -49,10 +46,8 @@ public class CompilerDemo {
         // (we'll skip this in real run)
 
         // 3. 初始化各组件
-        System.out.println("\n[2] Initializing components...");
-        StrategySelector strategySelector = new StrategySelector(schema);
-        TemplateEngine templateEngine = new TemplateEngine();
-        ASTBuilder astBuilder = new ASTBuilder(schema, strategySelector, templateEngine);
+        System.out.println("\\n[2] Initializing components...");
+        ASTBuilder astBuilder = new ASTBuilder();
         DSLRenderer renderer = new DSLRenderer();
         QueryValidator validator = new QueryValidator(schema);
         ResultTransformer resultTransformer = new ResultTransformer();
@@ -137,7 +132,10 @@ public class CompilerDemo {
         SemanticIR ir = new SemanticIR();
         ir.setIntent("patient_search");
         ir.addEntity(new SemanticIR.Entity(entityType, entityValue));
-        ir.setTimeConstraint(new SemanticIR.TimeConstraint("relative", timeValue, timeUnit));
+        SemanticIR.Entity timeEntity = new SemanticIR.Entity("time", String.valueOf(timeValue));
+        timeEntity.setUnit(timeUnit);
+        timeEntity.setClauseType("range");
+        ir.addEntity(timeEntity);
 
         ASTBuilder.QueryContainer container = builder.build(ir);
         String dsl = renderer.render(container);
