@@ -156,9 +156,21 @@ public class DSLRenderer {
 
     private JsonNode renderAggregation(QueryNode.AggregationNode agg) {
         ObjectNode root = MAPPER.createObjectNode();
-        ObjectNode terms = root.putObject(agg.getName()).putObject("terms");
-        terms.put("field", agg.getField());
-        terms.put("size", agg.getSize());
+        String aggName = agg.getName() != null ? agg.getName() : "agg";
+
+        if ("date_histogram".equals(agg.getType())) {
+            ObjectNode hist = root.putObject(aggName).putObject("date_histogram");
+            hist.put("field", agg.getField());
+            hist.put("interval", agg.getInterval());
+            if (agg.getFormat() != null) hist.put("format", agg.getFormat());
+            hist.put("min_doc_count", 1);
+            // ES 6.x 不支持 date_histogram 的 size 参数
+        } else {
+            // default: terms aggregation（包括 count 转换的 _index terms）
+            ObjectNode terms = root.putObject(aggName).putObject("terms");
+            terms.put("field", agg.getField());
+            terms.put("size", agg.getSize());
+        }
         return root;
     }
 

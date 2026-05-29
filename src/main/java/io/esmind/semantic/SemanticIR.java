@@ -19,7 +19,7 @@ import java.util.List;
 public class SemanticIR {
 
     /** IR schema 版本号。Entity 编译字段变更时 +1 */
-    public static final int CURRENT_VERSION = 1;
+    public static final int CURRENT_VERSION = 2;
 
     private int version = CURRENT_VERSION;
     private String intent;
@@ -65,16 +65,22 @@ public class SemanticIR {
                                         // | patient_id | report_type | exam_item | time
         private String value;           // 原始值："高血压", "白细胞", "30"
         private String unit;            // 时间单位："day", "month", "year"（仅 type=time）
+        private String timeType;        // 时间类型："RELATIVE" | "ABSOLUTE"（仅 type=time）
+                                        // RELATIVE: value=天数，unit=day/month/year
+                                        // ABSOLUTE: value=yyyy-MM-dd 或 yyyy-MM 或 yyyy
         private String operator;        // gt | gte | lt | lte | eq（仅数值比较）
         private String numericValue;    // 比较目标值
 
         // ── 编译层（Resolution 填充） ──
-        private String clauseType;      // term | match_phrase | exists | range
-        private String table;           // nested 表路径（null = 顶级查询）
+        private String clauseType;      // term | match_phrase | exists | range（查询子句类型）
+        private String context;          // "ROOT" | "NESTED"（查询上下文）
+        private String contextPath;      // nested 路径（仅 context=NESTED）
+        private String table;           // 业务表名（nested 表路径 = null 为顶级）
         private String field;           // ES 字段路径
         private String keyword;         // keyword 子字段（精确匹配用）
         private String valueField;      // 数值字段（如检验结果值）
         private boolean useSynonyms;    // 是否启用同义词
+        private String group;           // 多表 should 组合分组标识
 
         public Entity() {}
 
@@ -92,6 +98,9 @@ public class SemanticIR {
         public String getUnit() { return unit; }
         public void setUnit(String u) { this.unit = u; }
 
+        public String getTimeType() { return timeType; }
+        public void setTimeType(String tt) { this.timeType = tt; }
+
         public String getOperator() { return operator; }
         public void setOperator(String op) { this.operator = op; }
 
@@ -100,6 +109,12 @@ public class SemanticIR {
 
         public String getClauseType() { return clauseType; }
         public void setClauseType(String ct) { this.clauseType = ct; }
+
+        public String getContext() { return context; }
+        public void setContext(String c) { this.context = c; }
+
+        public String getContextPath() { return contextPath; }
+        public void setContextPath(String cp) { this.contextPath = cp; }
 
         public String getTable() { return table; }
         public void setTable(String t) { this.table = t; }
@@ -115,6 +130,9 @@ public class SemanticIR {
 
         public boolean isUseSynonyms() { return useSynonyms; }
         public void setUseSynonyms(boolean us) { this.useSynonyms = us; }
+
+        public String getGroup() { return group; }
+        public void setGroup(String g) { this.group = g; }
     }
 
     // ========================================================================
@@ -123,8 +141,12 @@ public class SemanticIR {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public static class Aggregation {
-        private String type;   // "count" | "group_by"
-        private String field;
+        private String type;       // "count" | "date_histogram" | "terms"
+        private String field;      // ES 字段路径（date_histogram/terms 需要完整路径如 "menzhenjiuzhenjilu.visit_time"）
+        private String interval;   // "month" | "day" | "quarter" | "year"（仅 date_histogram）
+        private String format;     // "yyyy-MM" 等日期格式（仅 date_histogram）
+        private int size = 10;     // 最大返回桶数
+        private String name;       // 聚合名称
 
         public Aggregation() {}
 
@@ -132,5 +154,13 @@ public class SemanticIR {
         public void setType(String type) { this.type = type; }
         public String getField() { return field; }
         public void setField(String field) { this.field = field; }
+        public String getInterval() { return interval; }
+        public void setInterval(String interval) { this.interval = interval; }
+        public String getFormat() { return format; }
+        public void setFormat(String format) { this.format = format; }
+        public int getSize() { return size; }
+        public void setSize(int size) { this.size = size; }
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
     }
 }

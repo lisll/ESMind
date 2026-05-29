@@ -99,11 +99,56 @@ public class EsMindCompiler {
 
             if ("patient_count".equals(ir.getIntent()) && ir.getAggregation() != null
                     && "count".equals(ir.getAggregation().getType())) {
-                String countResult = esClient.count(indexName, dsl);
+                // _count API 不支持 size 和 aggs
+                com.fasterxml.jackson.databind.JsonNode dslJson = MAPPER.readTree(dsl);
+                com.fasterxml.jackson.databind.node.ObjectNode dslObj = (com.fasterxml.jackson.databind.node.ObjectNode) dslJson;
+                dslObj.remove("size");
+                dslObj.remove("aggs");
+                String countDsl = MAPPER.writeValueAsString(dslObj);
+                String countResult = esClient.count(indexName, countDsl);
                 response.setEsRawResult(countResult);
                 com.fasterxml.jackson.databind.JsonNode countJson = MAPPER.readTree(countResult);
                 long count = countJson.get("count").asLong();
                 response.setAnswer("共查询到 " + count + " 名患者。");
+            } else if (ir.getAggregation() != null && "date_histogram".equals(ir.getAggregation().getType())) {
+                // date_histogram 聚合查询
+                esResult = esClient.search(indexName, dsl);
+                response.setEsRawResult(esResult);
+                com.fasterxml.jackson.databind.JsonNode esJson = MAPPER.readTree(esResult);
+                String aggName = ir.getAggregation().getName() != null ? ir.getAggregation().getName() : "visit_by_month";
+                com.fasterxml.jackson.databind.JsonNode aggs = esJson.get("aggregations");
+                if (aggs != null && aggs.has(aggName)) {
+                    com.fasterxml.jackson.databind.JsonNode buckets = aggs.get(aggName).get("buckets");
+                    if (buckets != null && buckets.isArray()) {
+                        StringBuilder sb = new StringBuilder();
+                        // 兼容 ES 6.x (total=数字) 和 7.x+ (total={value: N})
+                        com.fasterxml.jackson.databind.JsonNode totalNode = esJson.get("hits").get("total");
+                        String totalStr = totalNode.isObject()
+                                ? totalNode.get("value").asText()
+                                : totalNode.asText();
+                        sb.append("共查询到 **").append(totalStr)
+                            .append("** 条记录。按时间分布如下：\n\n");
+                        sb.append("| 月份 | 记录数 |\n|------|--------|\n");
+                        long totalRecords = 0;
+                        for (com.fasterxml.jackson.databind.JsonNode bucket : buckets) {
+                            String key = bucket.has("key_as_string") ? bucket.get("key_as_string").asText()
+                                    : String.valueOf(bucket.get("key").asLong());
+                            long count = bucket.get("doc_count").asLong();
+                            sb.append("| ").append(key).append(" | ").append(count).append(" |\n");
+                            totalRecords += count;
+                        }
+                        sb.append("| **合计** | **").append(totalRecords).append("** |\n");
+                        response.setAnswer(sb.toString());
+                    }
+                }
+                if (response.getAnswer() == null) {
+                    // 聚合结果为空
+                    com.fasterxml.jackson.databind.JsonNode totalNode = esJson.get("hits").get("total");
+                    String totalStr = totalNode.isObject()
+                            ? totalNode.get("value").asText()
+                            : totalNode.asText();
+                    response.setAnswer("共查询到 **" + totalStr + "** 条记录，无聚合数据。");
+                }
             } else {
                 esResult = esClient.search(indexName, dsl);
                 response.setEsRawResult(esResult);

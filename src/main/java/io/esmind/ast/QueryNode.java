@@ -150,11 +150,17 @@ public abstract class QueryNode {
 
     // ===== AggregationNode =====
     public static class AggregationNode extends QueryNode {
+        private String type;         // "terms" | "date_histogram"
         private String name;
         private String field;
         private int size = 10;
+        private String interval;     // "month" | "day" | "quarter" | "year"（仅 date_histogram）
+        private String format;       // "yyyy-MM" 等日期格式（仅 date_histogram）
 
         public AggregationNode() { super("aggregation"); }
+
+        public String getType() { return type; }
+        public void setType(String type) { this.type = type; }
 
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
@@ -164,6 +170,12 @@ public abstract class QueryNode {
 
         public int getSize() { return size; }
         public void setSize(int size) { this.size = size; }
+
+        public String getInterval() { return interval; }
+        public void setInterval(String interval) { this.interval = interval; }
+
+        public String getFormat() { return format; }
+        public void setFormat(String format) { this.format = format; }
     }
 
     // ===== ExistsNode =====
