@@ -41,7 +41,7 @@ public class ChatController {
                 semanticParser, templateEngine,
                 dslRenderer, queryValidator,
                 esRestClient, resultTransformer,
-                indexName
+                indexName, schemaRegistry
         );
         log.info("ChatController initialized with v2 Compiler: index={}", indexName);
     }

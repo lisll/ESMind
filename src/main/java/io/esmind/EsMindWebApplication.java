@@ -114,17 +114,19 @@ public class EsMindWebApplication {
          * Only extracts intent + entity type/value — NO ES DSL generation.
          */
         @Bean
-        SemanticParser semanticParser(@Qualifier("esmindProperties") Properties props) {
+        SemanticParser semanticParser(@Qualifier("esmindProperties") Properties props,
+                                      SchemaRegistry schemaRegistry) {
             String baseUrl = props.getProperty(PROP_BASE_URL, DEFAULT_BASE_URL);
             String apiKey = resolveSecret(props.getProperty(PROP_API_KEY, ""), ENV_API_KEY);
             String modelName = props.getProperty(PROP_MODEL, DEFAULT_MODEL);
-            log.info("SemanticParser initialized: model={} @ {}", modelName, baseUrl);
-            return new SemanticParser(baseUrl, apiKey, modelName);
+            log.info("SemanticParser initialized: model={} @ {} (schema={})",
+                    modelName, baseUrl, schemaRegistry != null ? schemaRegistry.size() + " fields" : "none");
+            return new SemanticParser(baseUrl, apiKey, modelName, schemaRegistry);
         }
 
         @Bean
-        TemplateEngine queryTemplateEngine() {
-            return new TemplateEngine();
+        TemplateEngine queryTemplateEngine(SchemaRegistry schemaRegistry) {
+            return new TemplateEngine(schemaRegistry);
         }
 
         @Bean

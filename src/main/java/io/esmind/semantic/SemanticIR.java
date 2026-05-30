@@ -147,6 +147,7 @@ public class SemanticIR {
         private String format;     // "yyyy-MM" 等日期格式（仅 date_histogram）
         private int size = 10;     // 最大返回桶数
         private String name;       // 聚合名称
+        private String nestedPath;  // nested 路径（仅 AggregationNode 编译用）
 
         public Aggregation() {}
 
@@ -162,5 +163,7 @@ public class SemanticIR {
         public void setSize(int size) { this.size = size; }
         public String getName() { return name; }
         public void setName(String name) { this.name = name; }
+        public String getNestedPath() { return nestedPath; }
+        public void setNestedPath(String np) { this.nestedPath = np; }
     }
 }

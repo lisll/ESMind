@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.esmind.ast.ASTBuilder;
 import io.esmind.ast.QueryNode;
 import io.esmind.compiler.EsRestClient;
+import io.esmind.compiler.SchemaRegistry;
 import io.esmind.renderer.DSLRenderer;
 import io.esmind.renderer.ResultTransformer;
 import io.esmind.semantic.SemanticIR;
@@ -13,6 +14,7 @@ import io.esmind.validator.QueryValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -36,6 +38,7 @@ public class EsMindCompiler {
     private final EsRestClient esClient;
     private final ResultTransformer resultTransformer;
     private final String indexName;
+    private final SchemaRegistry schemaRegistry;
 
     public EsMindCompiler(SemanticParser parser,
                           TemplateEngine templateEngine,
@@ -44,6 +47,17 @@ public class EsMindCompiler {
                           EsRestClient esClient,
                           ResultTransformer resultTransformer,
                           String indexName) {
+        this(parser, templateEngine, renderer, validator, esClient, resultTransformer, indexName, null);
+    }
+
+    public EsMindCompiler(SemanticParser parser,
+                          TemplateEngine templateEngine,
+                          DSLRenderer renderer,
+                          QueryValidator validator,
+                          EsRestClient esClient,
+                          ResultTransformer resultTransformer,
+                          String indexName,
+                          SchemaRegistry schemaRegistry) {
         this.semanticParser = parser;
         this.templateEngine = templateEngine;
         this.dslRenderer = renderer;
@@ -51,6 +65,7 @@ public class EsMindCompiler {
         this.esClient = esClient;
         this.resultTransformer = resultTransformer;
         this.indexName = indexName;
+        this.schemaRegistry = schemaRegistry;
     }
 
     /**
@@ -118,7 +133,20 @@ public class EsMindCompiler {
                 String aggName = ir.getAggregation().getName() != null ? ir.getAggregation().getName() : "visit_by_month";
                 com.fasterxml.jackson.databind.JsonNode aggs = esJson.get("aggregations");
                 if (aggs != null && aggs.has(aggName)) {
-                    com.fasterxml.jackson.databind.JsonNode buckets = aggs.get(aggName).get("buckets");
+                    com.fasterxml.jackson.databind.JsonNode aggRoot = aggs.get(aggName);
+                    // 兼容 nested 聚合：结果在 aggRoot 的子字段下
+                    com.fasterxml.jackson.databind.JsonNode buckets = aggRoot.get("buckets");
+                    if (buckets == null) {
+                        // nested aggregation → buckets 在子聚合字段下（如 by_shouyezhenduan_diagnosis_time）
+                        Iterator<String> fieldNames = aggRoot.fieldNames();
+                        while (fieldNames.hasNext()) {
+                            String fn = fieldNames.next();
+                            if (fn.startsWith("by_")) {
+                                buckets = aggRoot.get(fn).get("buckets");
+                                break;
+                            }
+                        }
+                    }
                     if (buckets != null && buckets.isArray()) {
                         StringBuilder sb = new StringBuilder();
                         // 兼容 ES 6.x (total=数字) 和 7.x+ (total={value: N})

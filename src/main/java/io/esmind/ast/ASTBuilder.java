@@ -104,6 +104,7 @@ public class ASTBuilder {
                     if (agg.getField() != null) aggNode.setField(agg.getField());
                     if (agg.getInterval() != null) aggNode.setInterval(agg.getInterval());
                     if (agg.getFormat() != null) aggNode.setFormat(agg.getFormat());
+                    if (agg.getNestedPath() != null) aggNode.setNestedPath(agg.getNestedPath());
                     aggNode.setSize(agg.getSize() > 0 ? agg.getSize() : 100);
                     break;
                 case "terms":

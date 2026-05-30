@@ -126,6 +126,76 @@ public class SchemaRegistry {
     public String getIndexName() { return indexName; }
     public int size() { return fieldsByName.size(); }
 
+    /**
+     * 通过中文别名查找顶层业务表（nested/object 表名）。
+     * 匹配优先级：精确bizName → 包含bizName → 字段名包含alias → 字段名被alias包含
+     */
+    public String findTableByAlias(String alias) {
+        if (alias == null || alias.isEmpty()) return null;
+        // 1. 精确匹配 bizName
+        SchemaField exact = getByBizName(alias);
+        if (exact != null && isTopLevelTable(exact)) return exact.getFieldName();
+        // 2. 模糊匹配 bizName
+        SchemaField fuzzy = fuzzyLookupBizName(alias);
+        if (fuzzy != null && isTopLevelTable(fuzzy)) return fuzzy.getFieldName();
+        // 3. 在字段名中搜索包含关系（nested/object 表名）
+        for (SchemaField f : getAllFields()) {
+            String fn = f.getFieldName();
+            if (isTopLevelTable(f)) {
+                if (fn.contains(alias) || alias.contains(fn)) return fn;
+            }
+        }
+        // 4. 搜索子字段的 bizName（如 "病案首页" 可能对应 binganshouye.admission_time 的 bizName）
+        for (SchemaField f : getAllFields()) {
+            if (f.getBizNames() != null) {
+                for (String bn : f.getBizNames()) {
+                    if (bn.contains(alias) || alias.contains(bn)) {
+                        String tbl = extractTableName(f.getFieldName());
+                        if (tbl != null) return tbl;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 获取某个业务表下可用的 date 字段列表。
+     * 返回字段名（含表前缀，如 binganshouye.admission_time）
+     */
+    public List<String> getDateFieldsForTable(String tableName) {
+        List<String> result = new ArrayList<>();
+        // 先查 nested 表下的字段
+        if (fieldsByNestedPath.containsKey(tableName)) {
+            for (SchemaField f : fieldsByNestedPath.get(tableName)) {
+                if (f.isDateField()) result.add(f.getFieldName());
+            }
+        }
+        // 再查整个 registry 中属于该表前缀的 date 字段
+        String prefix = tableName + ".";
+        for (SchemaField f : fieldsByName.values()) {
+            if (f.isDateField() && f.getFieldName().startsWith(prefix)) {
+                if (!result.contains(f.getFieldName())) result.add(f.getFieldName());
+            }
+        }
+        return result;
+    }
+
+    /** 判断是否为顶层业务表（nested 或 object 类型的顶级字段） */
+    private boolean isTopLevelTable(SchemaField f) {
+        if (f == null) return false;
+        // 顶层表：没有父路径（nestedPath==null）且自身是 nested/object
+        return f.getNestedPath() == null
+                && ("nested".equals(f.getType()) || "object".equals(f.getType()));
+    }
+
+    /** 从完整字段路径提取表名（第一个 . 之前的部分） */
+    private String extractTableName(String fieldPath) {
+        if (fieldPath == null) return null;
+        int dot = fieldPath.indexOf('.');
+        return dot > 0 ? fieldPath.substring(0, dot) : fieldPath;
+    }
+
     // ===== 缓存 =====
 
     public void saveToCache() throws Exception {

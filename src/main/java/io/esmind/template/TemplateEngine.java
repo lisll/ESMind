@@ -3,6 +3,7 @@ package io.esmind.template;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.esmind.ast.QueryNode;
+import io.esmind.compiler.SchemaRegistry;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.semantic.SynonymDictionary;
 import org.slf4j.Logger;
@@ -30,7 +31,10 @@ public class TemplateEngine {
     private final Map<String, List<QueryTemplate>> templatesByEntityType = new HashMap<>();
     private final List<QueryTemplate> allTemplates;
 
-    /** 通用类别词 → exists 字段映射 */
+    /** Runtime Schema Registry — 替代 CATEGORY_WORDS / NESTED_TABLES 等硬编码 */
+    private final SchemaRegistry schemaRegistry;
+
+    /** 通用类别词 → exists 字段映射（仅保留做初始化种子，运行时优先查 SchemaRegistry） */
     private static final Map<String, String> CATEGORY_WORDS = new HashMap<>();
     static {
         CATEGORY_WORDS.put("检验报告", "jianyanbaogaofu");
@@ -96,11 +100,13 @@ public class TemplateEngine {
     // 构造 & 模板加载
     // ========================================================================
 
-    public TemplateEngine() {
+    public TemplateEngine(SchemaRegistry schemaRegistry) {
+        this.schemaRegistry = schemaRegistry;
         this.allTemplates = loadTemplates();
         indexTemplates();
-        log.info("TemplateEngine loaded {} templates for {} entity types",
-                allTemplates.size(), templatesByEntityType.size());
+        log.info("TemplateEngine loaded {} templates for {} entity types, schema-aware={}",
+                allTemplates.size(), templatesByEntityType.size(),
+                schemaRegistry != null);
     }
 
     // ========================================================================
@@ -194,14 +200,11 @@ public class TemplateEngine {
         SemanticIR.Aggregation agg = ir.getAggregation();
         if (agg != null && (agg.getField() == null || agg.getField().isEmpty())
                 && !"count".equals(agg.getType())) {
-            // 从 resolved entities 中找到第一个非时间、非诊断的实体，取其表名
+            // 聚合支持所有业务表（包括诊断表），不应用时间过滤器的排除逻辑
             String aggTable = null;
             for (SemanticIR.Entity e : resolved) {
                 String table = e.getTable();
-                if (table != null && !"time".equals(e.getType())
-                        && !"shouyezhenduan".equals(table)
-                        && !"menzhenshuju".equals(table)
-                        && !"menzhenzhenduan".equals(table)) {
+                if (table != null && !"time".equals(e.getType())) {
                     aggTable = table;
                     break;
                 }
@@ -209,6 +212,10 @@ public class TemplateEngine {
             if (aggTable != null && TABLE_TIME_FIELDS.containsKey(aggTable)) {
                 String dateField = TABLE_TIME_FIELDS.get(aggTable);
                 agg.setField(aggTable + "." + dateField);
+                // 记录 nestedPath（nested 表需要包 nested aggregation）
+                if (schemaRegistry != null && schemaRegistry.getNestedPaths().contains(aggTable)) {
+                    agg.setNestedPath(aggTable);
+                }
                 log.info("Auto-resolved aggregation field: {} (table={})", agg.getField(), aggTable);
             } else if (aggTable != null) {
                 log.warn("No date field mapping for aggregation table: {}", aggTable);
@@ -261,7 +268,14 @@ public class TemplateEngine {
 
     /** 设置 entity 的 context 和 contextPath（基于表名是否在 nested 列表中） */
     private void setContext(SemanticIR.Entity entity, String table) {
-        if (table != null && NESTED_TABLES.contains(table)) {
+        if (table == null) return;
+        boolean isNested = false;
+        if (schemaRegistry != null) {
+            isNested = schemaRegistry.getNestedPaths().contains(table);
+        } else {
+            isNested = NESTED_TABLES.contains(table);
+        }
+        if (isNested) {
             entity.setContext("NESTED");
             entity.setContextPath(table);
         } else {
@@ -280,6 +294,9 @@ public class TemplateEngine {
         if (value != null && !value.isEmpty()
                 && ("lab_item".equals(type) || "medicine".equals(type) || "surgery".equals(type))) {
             String existsField = CATEGORY_WORDS.get(value);
+            if (existsField == null && schemaRegistry != null) {
+                existsField = schemaRegistry.findTableByAlias(value);
+            }
             if (existsField != null) {
                 entity.setClauseType("exists");
                 entity.setTable(existsField);
@@ -292,6 +309,9 @@ public class TemplateEngine {
         // 2. report_type → value 路由
         if ("report_type".equals(type) && value != null) {
             String table = resolveReportTypeTable(value);
+            if (table == null && schemaRegistry != null) {
+                table = schemaRegistry.findTableByAlias(value);
+            }
             if (table != null) {
                 entity.setClauseType("exists");
                 entity.setTable(table);

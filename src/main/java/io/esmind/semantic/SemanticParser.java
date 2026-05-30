@@ -3,6 +3,8 @@ package io.esmind.semantic;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import io.esmind.compiler.SchemaRegistry;
+import io.esmind.compiler.SchemaField;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,6 +13,8 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class SemanticParser {
 
@@ -21,6 +25,7 @@ public class SemanticParser {
     private final String apiKey;
     private final String modelName;
     private final HttpClient httpClient;
+    private final SchemaRegistry schemaRegistry;
 
     private static final String SYSTEM_PROMPT =
         "你是一个医疗查询解析器。将用户的查询转为结构化JSON。\n\n"
@@ -78,9 +83,14 @@ public class SemanticParser {
         + "输出: {\"intent\":\"patient_search\",\"entities\":[{\"type\":\"report_type\",\"value\":\"outpatient\"}],\"aggregation\":{\"type\":\"date_histogram\",\"interval\":\"month\",\"format\":\"yyyy-MM\",\"name\":\"visit_by_month\"}}";
 
     public SemanticParser(String apiUrl, String apiKey, String modelName) {
+        this(apiUrl, apiKey, modelName, null);
+    }
+
+    public SemanticParser(String apiUrl, String apiKey, String modelName, SchemaRegistry schemaRegistry) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.modelName = modelName;
+        this.schemaRegistry = schemaRegistry;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -132,7 +142,16 @@ public class SemanticParser {
             ArrayNode messages = body.putArray("messages");
             com.fasterxml.jackson.databind.node.ObjectNode sysMsg = messages.addObject();
             sysMsg.put("role", "system");
-            sysMsg.put("content", SYSTEM_PROMPT);
+
+            // 动态注入 schema（可选）
+            String prompt = SYSTEM_PROMPT;
+            if (schemaRegistry != null) {
+                String schemaStr = buildSchemaSection();
+                if (!schemaStr.isEmpty()) {
+                    prompt = schemaStr + "\n\n" + prompt;
+                }
+            }
+            sysMsg.put("content", prompt);
 
             com.fasterxml.jackson.databind.node.ObjectNode userMsgNode = messages.addObject();
             userMsgNode.put("role", "user");
@@ -142,5 +161,50 @@ public class SemanticParser {
         } catch (Exception e) {
             throw new RuntimeException("Failed to build LLM request", e);
         }
+    }
+
+    /**
+     * 从 SchemaRegistry 生成紧凑的业务表列表，注入到 LLM prompt。
+     * 只输出 Top-Level 业务表（nested/object），不输出全量 224 个字段。
+     */
+    private String buildSchemaSection() {
+        if (schemaRegistry == null) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("当前 ES 索引中的业务表：\n");
+
+        // 收集所有顶层业务表（nested + object）
+        Set<String> tables = new LinkedHashSet<>();
+
+        // 1. Nested 表
+        tables.addAll(schemaRegistry.getNestedPaths());
+
+        // 2. Object 表（顶层字段，无 '.'，且不是 text/keyword/date 等叶类型）
+        for (SchemaField f : schemaRegistry.getAllFields()) {
+            if (f.getFieldName().contains(".")) continue;
+            String type = f.getType();
+            if ("nested".equals(type)) continue; // 已在上面
+            if ("object".equals(type) || (!"text".equals(type) && !"keyword".equals(type)
+                    && !"date".equals(type) && type != null)) {
+                tables.add(f.getFieldName());
+            }
+        }
+
+        for (String table : tables) {
+            boolean isNested = schemaRegistry.getNestedPaths().contains(table);
+            sb.append("- ").append(table);
+            sb.append(" (").append(isNested ? "nested" : "object").append(")");
+            List<String> dateFields = schemaRegistry.getDateFieldsForTable(table);
+            if (dateFields != null && !dateFields.isEmpty()) {
+                String dateStr = dateFields.stream()
+                        .map(df -> df.replace(table + ".", ""))
+                        .limit(3)
+                        .collect(Collectors.joining(", "));
+                sb.append(" [date: ").append(dateStr).append("]");
+            }
+            sb.append("\n");
+        }
+
+        sb.append("\nreport_type 的值可以直接使用上表中的表名（如 shouyezhenduan）。");
+        return sb.toString();
     }
 }

@@ -158,20 +158,39 @@ public class DSLRenderer {
         ObjectNode root = MAPPER.createObjectNode();
         String aggName = agg.getName() != null ? agg.getName() : "agg";
 
-        if ("date_histogram".equals(agg.getType())) {
-            ObjectNode hist = root.putObject(aggName).putObject("date_histogram");
-            hist.put("field", agg.getField());
-            hist.put("interval", agg.getInterval());
-            if (agg.getFormat() != null) hist.put("format", agg.getFormat());
-            hist.put("min_doc_count", 1);
-            // ES 6.x 不支持 date_histogram 的 size 参数
+        JsonNode innerAgg = buildInnerAgg(agg);
+        if (innerAgg == null) return null;
+
+        // nested 表的聚合需要包一层 nested aggregation
+        if (agg.getNestedPath() != null) {
+            ObjectNode nestedWrapper = root.putObject(aggName);
+            nestedWrapper.putObject("nested").put("path", agg.getNestedPath());
+            ObjectNode aggsNode = MAPPER.createObjectNode();
+            aggsNode.set("by_" + agg.getField().replace(".", "_"), innerAgg);
+            nestedWrapper.put("aggs", aggsNode);
         } else {
-            // default: terms aggregation（包括 count 转换的 _index terms）
-            ObjectNode terms = root.putObject(aggName).putObject("terms");
-            terms.put("field", agg.getField());
-            terms.put("size", agg.getSize());
+            root.set(aggName, innerAgg);
         }
         return root;
+    }
+
+    private JsonNode buildInnerAgg(QueryNode.AggregationNode agg) {
+        if ("date_histogram".equals(agg.getType())) {
+            ObjectNode hist = MAPPER.createObjectNode();
+            ObjectNode dh = hist.putObject("date_histogram");
+            dh.put("field", agg.getField());
+            dh.put("interval", agg.getInterval());
+            if (agg.getFormat() != null) dh.put("format", agg.getFormat());
+            dh.put("min_doc_count", 1);
+            return hist;
+        } else if ("terms".equals(agg.getType())) {
+            ObjectNode terms = MAPPER.createObjectNode();
+            ObjectNode t = terms.putObject("terms");
+            t.put("field", agg.getField());
+            t.put("size", agg.getSize());
+            return terms;
+        }
+        return null;
     }
 
     private JsonNode renderSort(QueryNode.SortNode sort) {

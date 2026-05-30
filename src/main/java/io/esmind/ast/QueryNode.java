@@ -156,6 +156,7 @@ public abstract class QueryNode {
         private int size = 10;
         private String interval;     // "month" | "day" | "quarter" | "year"（仅 date_histogram）
         private String format;       // "yyyy-MM" 等日期格式（仅 date_histogram）
+        private String nestedPath;   // nested 路径（有值时需要包 nested aggregation）
 
         public AggregationNode() { super("aggregation"); }
 
@@ -176,6 +177,9 @@ public abstract class QueryNode {
 
         public String getFormat() { return format; }
         public void setFormat(String format) { this.format = format; }
+
+        public String getNestedPath() { return nestedPath; }
+        public void setNestedPath(String np) { this.nestedPath = np; }
     }
 
     // ===== ExistsNode =====
