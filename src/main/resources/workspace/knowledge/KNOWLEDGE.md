@@ -45,3 +45,18 @@ Schema 已自动加载并缓存，查询时不需要手动查 mapping。系统�
 2. **时间过滤**：只应用到主动查询表（非诊断表），支持 RELATIVE（近N天）和 ABSOLUTE（yyyy-MM-dd）
 3. **聚合查询**：支持 count、date_histogram（按月分布）、terms
 4. **Object 表 exists**：使用具体时间字段（如 `ruyuanjilu.admission_time`）而非表名，避免空壳记录
+
+## 自动表发现（SchemaExplorer）
+
+系统启动时自动扫描全部 3,469+ 张 nested/object 表，对每张表自动推断业务分类：
+
+| 推断分类 | 匹配条件 | 示例表 |
+|---------|---------|-------|
+| diagnosis | 含 diagnosis_name 字段 | shouyezhenduan, menzhenzhenduan |
+| order | 含 order_item_name 字段 | yizhu, menzhenxiyichufang, menzhenjizhenorder |
+| lab | 含 lab_item_name 字段 | jianyanbaogaofu |
+| exam | 含 norm_exam_item_name 字段 | jianchabaogaofu, chaoshengexam |
+| surgery | 含 operation_name 字段 | shoushujilu, shouyeshoushu |
+| fee | 含 charge_fee 字段 | zhuyuanfeiyongmingxi, menzhenfeiyongmingxi |
+
+查询时找不到表时自动 fallback：BusinessSemanticRegistry → SchemaRegistry → **SchemaExplorer 关键词匹配**

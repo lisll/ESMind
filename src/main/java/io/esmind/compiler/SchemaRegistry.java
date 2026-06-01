@@ -195,9 +195,11 @@ public class SchemaRegistry {
     /** 判断是否为顶层业务表（nested 或 object 类型的顶级字段） */
     public boolean isTopLevelTable(SchemaField f) {
         if (f == null) return false;
-        // 顶层表：没有父路径（nestedPath==null）且自身是 nested/object
-        return f.getNestedPath() == null
-                && ("nested".equals(f.getType()) || "object".equals(f.getType()));
+        if (f.getFieldName() == null || f.getFieldName().contains(".")) return false;
+        // 顶层表：字段名不含点号（非子字段）且类型是 nested 或 object
+        // 注意：SchemaLoader 对 nested/object 表自身也设了 nestedPath=self，
+        //       所以不能依赖 nestedPath==null，改用 字段名是否包含. 来判断
+        return "nested".equals(f.getType()) || "object".equals(f.getType());
     }
 
     /** 从完整字段路径提取表名（第一个 . 之前的部分） */
