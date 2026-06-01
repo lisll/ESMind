@@ -56,9 +56,9 @@ tables:
     dateFields: [operation_time]
 
   menzhenxiyichufang:
-    businessName: 门诊处方
-    aliases: [处方, 药品, 用药, 药方, 西药处方, prescription]
-    categories: [处方]
+    businessName: 门诊医嘱
+    aliases: [门诊医嘱, 门诊处方, 处方, 药品, 用药, 药方, 西药处方, prescription]
+    categories: [门诊, 处方]
     dateFields: [order_time]
 
   binglizhenduan:
@@ -98,8 +98,8 @@ tables:
     dateFields: [operation_date]
 
   yizhu:
-    businessName: 医嘱
-    aliases: [医嘱, 医嘱记录]
+    businessName: 住院医嘱
+    aliases: [医嘱, 住院医嘱, 医嘱记录, 住院用药]
     categories: [医嘱]
     dateFields: [order_time]
 

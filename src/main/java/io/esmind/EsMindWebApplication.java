@@ -7,6 +7,7 @@ import io.esmind.ast.ASTBuilder;
 import io.esmind.compiler.BusinessSemanticRegistry;
 import io.esmind.compiler.EsRestClient;
 import io.esmind.compiler.QueryPlanner;
+import io.esmind.compiler.SchemaExplorer;
 import io.esmind.compiler.SchemaLoader;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.renderer.DSLRenderer;
@@ -133,8 +134,17 @@ public class EsMindWebApplication {
 
         @Bean
         TemplateEngine queryTemplateEngine(SchemaRegistry schemaRegistry,
-                                           BusinessSemanticRegistry businessSemanticRegistry) {
-            return new TemplateEngine(schemaRegistry, businessSemanticRegistry);
+                                           BusinessSemanticRegistry businessSemanticRegistry,
+                                           SchemaExplorer schemaExplorer) {
+            return new TemplateEngine(schemaRegistry, businessSemanticRegistry, schemaExplorer);
+        }
+
+        @Bean
+        SchemaExplorer schemaExplorer(SchemaRegistry schemaRegistry) {
+            SchemaExplorer explorer = new SchemaExplorer(schemaRegistry);
+            explorer.explore(); // 启动时自动扫描
+            log.info("SchemaExplorer discovered {} tables", explorer.getTableCount());
+            return explorer;
         }
 
         @Bean

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.esmind.ast.QueryNode;
 import io.esmind.compiler.BusinessSemanticRegistry;
+import io.esmind.compiler.SchemaExplorer;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.semantic.SynonymDictionary;
@@ -35,6 +36,9 @@ public class TemplateEngine {
     /** Runtime Schema Registry */
     private final SchemaRegistry schemaRegistry;
 
+    /** Runtime SchemaExplorer — 自动表发现 + 关键词匹配 fallback */
+    private final SchemaExplorer schemaExplorer;
+
     /** Runtime Business Semantic Registry — 替代 CATEGORY_WORDS / resolveReportTypeTable / TABLE_TIME_FIELDS */
     private final BusinessSemanticRegistry businessRegistry;
 
@@ -53,7 +57,17 @@ public class TemplateEngine {
             if (tbl != null) return tbl;
         }
         if (schemaRegistry != null) {
-            return schemaRegistry.findTableByAlias(alias);
+            String tbl = schemaRegistry.findTableByAlias(alias);
+            if (tbl != null) return tbl;
+        }
+        // 3. SchemaExplorer 关键词匹配 fallback（不依赖 YAML，纯字段名模式匹配）
+        if (schemaExplorer != null) {
+            List<String> matches = schemaExplorer.findTableByKeyword(alias);
+            if (!matches.isEmpty()) {
+                String best = matches.get(0);
+                log.info("SchemaExplorer fallback: '{}' → {} (matches: {})", alias, best, matches);
+                return best;
+            }
         }
         return null;
     }
@@ -97,14 +111,16 @@ public class TemplateEngine {
     // 构造 & 模板加载
     // ========================================================================
 
-    public TemplateEngine(SchemaRegistry schemaRegistry, BusinessSemanticRegistry businessRegistry) {
+    public TemplateEngine(SchemaRegistry schemaRegistry, BusinessSemanticRegistry businessRegistry,
+                          SchemaExplorer schemaExplorer) {
         this.schemaRegistry = schemaRegistry;
         this.businessRegistry = businessRegistry;
+        this.schemaExplorer = schemaExplorer;
         this.allTemplates = loadTemplates();
         indexTemplates();
-        log.info("TemplateEngine loaded {} templates for {} entity types, schema={}, business={}",
+        log.info("TemplateEngine loaded {} templates for {} entity types, schema={}, business={}, explorer={}",
                 allTemplates.size(), templatesByEntityType.size(),
-                schemaRegistry != null, businessRegistry != null);
+                schemaRegistry != null, businessRegistry != null, schemaExplorer != null);
     }
 
     // ========================================================================
