@@ -1,0 +1,167 @@
+# ============================================================================
+# table-semantic.yaml — 核心业务表语义配置
+# ============================================================================
+# 设计原则：
+# 1. 只配 20+ 核心业务表 — 用户直接查询的表
+# 2. 大部分 nested 明细子表（如 jianyanbaogaomingxifu）由抽取模型自动生成，
+#    用户不会直接查询它们，不配
+# 3. 找不到的业务表名走 SchemaRegistry.findTableByAlias() 兜底
+# 4. 新增一张业务表只改此文件，不动 Java 代码
+# ============================================================================
+
+index: history2026_clinical_inhistory_0429122358
+
+tables:
+
+  binganshouye:
+    businessName: 病案首页
+    aliases: [首页, 首页资料, 出入院首页, 住院首页, frontpage]
+    categories: [病历]
+    dateFields: [admission_time, discharge_time]
+
+  shouyezhenduan:
+    businessName: 首页诊断
+    aliases: [诊断, 住院诊断, 出院诊断, frontpage_diag]
+    categories: [诊断]
+    dateFields: [diagnosis_time]
+
+  menzhenzhenduan:
+    businessName: 门诊诊断
+    aliases: [门诊诊断]
+    categories: [诊断]
+    dateFields: [diagnosis_time]
+
+  menzhenjiuzhenjilu:
+    businessName: 门诊就诊记录
+    aliases: [门诊, 就诊记录, 就诊, 门诊病历, 门诊看诊, outpatient]
+    categories: [就诊记录]
+    dateFields: [visit_time]
+
+  jianyanbaogaofu:
+    businessName: 检验报告
+    aliases: [化验, 检验, 检验结果, 化验结果, 化验单, 检验单, lab]
+    categories: [检验]
+    dateFields: [report_time]
+
+  jianchabaogaofu:
+    businessName: 检查报告
+    aliases: [检查, 检查报告, 辅助检查, 辅助检查结果, 检查结果, exam]
+    categories: [检查]
+    dateFields: [report_time]
+
+  shoushujilu:
+    businessName: 手术记录
+    aliases: [手术, 手术记录, surgery]
+    categories: [手术]
+    dateFields: [operation_time]
+
+  menzhenxiyichufang:
+    businessName: 门诊处方
+    aliases: [处方, 药品, 用药, 药方, 西药处方, prescription]
+    categories: [处方]
+    dateFields: [order_time]
+
+  binglizhenduan:
+    businessName: 病理报告
+    aliases: [病理, 病理诊断, 病理结果, pathology]
+    categories: [病理]
+    dateFields: [diagnosis_time]
+
+  hulitizhengyangli:
+    businessName: 体温记录
+    aliases: [体温, 体温单, 体温记录, 体温表, temperature]
+    categories: [护理]
+    dateFields: [record_time]
+
+  chuyuanxiaojiexin:
+    businessName: 出院小结
+    aliases: [出院, 出院小结, 出院记录, discharge]
+    categories: [病历]
+    dateFields: [discharge_time]
+
+  ruyuanjilu:
+    businessName: 入院记录
+    aliases: [入院, 入院记录, 入院病历, admission]
+    categories: [病历]
+    dateFields: [admission_time]
+
+  menzhenshuju:
+    businessName: 门诊数据
+    aliases: [门诊资料, 门诊信息]
+    categories: [门诊]
+    dateFields: [visiting_date]
+
+  shouyeshoushu:
+    businessName: 首页手术
+    aliases: [首页手术, 住院手术]
+    categories: [手术]
+    dateFields: [operation_date]
+
+  yizhu:
+    businessName: 医嘱
+    aliases: [医嘱, 医嘱记录]
+    categories: [医嘱]
+    dateFields: [order_time]
+
+  zhuyuanfeiyong:
+    businessName: 住院费用
+    aliases: [费用, 住院费用, 收费]
+    categories: [费用]
+    dateFields: [visit_date]
+
+  hulipdayizhu:
+    businessName: 护理PD医嘱
+    aliases: [护理医嘱, 护理记录]
+    categories: [护理]
+    dateFields: [execute_orders_schedule]
+
+  hulichuruliangjilu:
+    businessName: 护理出入量记录
+    aliases: [出入量, 护理出入量]
+    categories: [护理]
+    dateFields: [record_time]
+
+  menzhenfeiyongmingxi:
+    businessName: 门诊费用明细
+    aliases: [门诊费用, 收费明细]
+    categories: [费用]
+    dateFields: [charge_time]
+
+  yangbenkufu:
+    businessName: 样本库
+    aliases: [样本, 标本, 样本库]
+    categories: [检验]
+    dateFields: [instock_date]
+
+  shoumashuzhongyongyao:
+    businessName: 术中用药
+    aliases: [术中用药, 手术用药]
+    categories: [手术, 处方]
+    dateFields: [pharmacy_start_time]
+
+  shoumamazuijilu:
+    businessName: 麻醉记录
+    aliases: [麻醉, 麻醉记录]
+    categories: [手术]
+    dateFields: [anesthesia_start_time]
+
+  structureddatafu:
+    businessName: 结构化数据
+    aliases: [结构化数据, 结构化]
+    categories: [数据]
+    dateFields: [element_date_time]
+
+  BLWS:
+    businessName: 病历文书
+    aliases: [病历文书, 文书]
+    categories: [病历]
+    dateFields: [create_date_time]
+
+  chaoshengexamfu:
+    businessName: 超声检查
+    aliases: [超声, B超, 彩超, 超声检查]
+    categories: [检查]
+    dateFields: [report_time]
+
+# 找不到的表 → 走 SchemaRegistry.findTableByAlias() 兜底
+# 不配置也照常工作

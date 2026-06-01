@@ -3,6 +3,7 @@ package io.esmind.template;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.esmind.ast.QueryNode;
+import io.esmind.compiler.BusinessSemanticRegistry;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.semantic.SynonymDictionary;
@@ -31,82 +32,79 @@ public class TemplateEngine {
     private final Map<String, List<QueryTemplate>> templatesByEntityType = new HashMap<>();
     private final List<QueryTemplate> allTemplates;
 
-    /** Runtime Schema Registry — 替代 CATEGORY_WORDS / NESTED_TABLES 等硬编码 */
+    /** Runtime Schema Registry */
     private final SchemaRegistry schemaRegistry;
 
-    /** 通用类别词 → exists 字段映射（仅保留做初始化种子，运行时优先查 SchemaRegistry） */
-    private static final Map<String, String> CATEGORY_WORDS = new HashMap<>();
-    static {
-        CATEGORY_WORDS.put("检验报告", "jianyanbaogaofu");
-        CATEGORY_WORDS.put("化验", "jianyanbaogaofu");
-        CATEGORY_WORDS.put("检验", "jianyanbaogaofu");
-        CATEGORY_WORDS.put("处方", "menzhenxiyichufang");
-        CATEGORY_WORDS.put("药品", "menzhenxiyichufang");
-        CATEGORY_WORDS.put("用药", "menzhenxiyichufang");
-        CATEGORY_WORDS.put("手术", "shoushujilu");
-        CATEGORY_WORDS.put("检查", "jianchabaogaofu");
-        CATEGORY_WORDS.put("检查报告", "jianchabaogaofu");
-        CATEGORY_WORDS.put("辅助检查", "jianchabaogaofu");
-        CATEGORY_WORDS.put("辅助检查结果", "jianchabaogaofu");
-        CATEGORY_WORDS.put("检验检查", "jianyanbaogaofu");
-        CATEGORY_WORDS.put("病理", "binglizhenduan");
-        CATEGORY_WORDS.put("病理报告", "binglizhenduan");
-        CATEGORY_WORDS.put("门诊就诊", "menzhenjiuzhenjilu");
-        CATEGORY_WORDS.put("门诊就诊记录", "menzhenjiuzhenjilu");
-        CATEGORY_WORDS.put("门诊记录", "menzhenjiuzhenjilu");
-        CATEGORY_WORDS.put("出院小结", "chuyuanxiaojiexin");
-        CATEGORY_WORDS.put("入院记录", "ruyuanjilu");
-        CATEGORY_WORDS.put("体温", "hulitizhengyangli");
-        CATEGORY_WORDS.put("体温单", "hulitizhengyangli");
-        CATEGORY_WORDS.put("体温记录", "hulitizhengyangli");
-        CATEGORY_WORDS.put("病案首页", "binganshouye");
-        CATEGORY_WORDS.put("首页诊断", "shouyezhenduan");
+    /** Runtime Business Semantic Registry — 替代 CATEGORY_WORDS / resolveReportTypeTable / TABLE_TIME_FIELDS */
+    private final BusinessSemanticRegistry businessRegistry;
+
+    // ========================================================================
+    // 替代 CATEGORY_WORDS / TABLE_TIME_FIELDS / resolveReportTypeTable 的运行时查询
+    // ========================================================================
+
+    /**
+     * 通用表名解析：中文别名 → 业务表名。
+     * 查找链：BusinessSemanticRegistry → SchemaRegistry → null
+     */
+    private String resolveTableName(String alias) {
+        if (alias == null || alias.isEmpty()) return null;
+        if (businessRegistry != null) {
+            String tbl = businessRegistry.findTableByAlias(alias);
+            if (tbl != null) return tbl;
+        }
+        if (schemaRegistry != null) {
+            return schemaRegistry.findTableByAlias(alias);
+        }
+        return null;
     }
 
-    /** 各业务表 → 时间字段映射（Resolution 阶段用于时间 Entity 补全） */
-    private static final Map<String, String> TABLE_TIME_FIELDS = new HashMap<>();
-    static {
-        TABLE_TIME_FIELDS.put("menzhenjiuzhenjilu", "visit_time");
-        TABLE_TIME_FIELDS.put("zhuyuanfeiyong", "visit_date");
-        TABLE_TIME_FIELDS.put("shoumashuzhongyongyao", "pharmacy_start_time");
-        TABLE_TIME_FIELDS.put("binganshouye", "admission_time");
-        TABLE_TIME_FIELDS.put("hulitizhengyangli", "record_time");
-        TABLE_TIME_FIELDS.put("structureddatafu", "element_date_time");
-        TABLE_TIME_FIELDS.put("hulipdayizhu", "execute_orders_schedule");
-        TABLE_TIME_FIELDS.put("yangbenkufu", "instock_date");
-        TABLE_TIME_FIELDS.put("binglizhenduan", "diagnosis_time");
-        TABLE_TIME_FIELDS.put("yizhu", "order_time");
-        TABLE_TIME_FIELDS.put("menzhenfeiyongmingxi", "charge_time");
-        TABLE_TIME_FIELDS.put("jianchabaogaofu", "report_time");
-        TABLE_TIME_FIELDS.put("shouyezhenduan", "diagnosis_time");
-        TABLE_TIME_FIELDS.put("hulichuruliangjilu", "record_time");
-        TABLE_TIME_FIELDS.put("chaoshengexamfu", "report_time");
-        TABLE_TIME_FIELDS.put("shouyeshoushu", "operation_date");
-        TABLE_TIME_FIELDS.put("menzhenzhenduan", "diagnosis_time");
-        TABLE_TIME_FIELDS.put("jianyanbaogaozhubiaofu", "report_time");
-        TABLE_TIME_FIELDS.put("BLWS", "create_date_time");
-        TABLE_TIME_FIELDS.put("jianyanbaogaomingxifu", "report_time");
-        TABLE_TIME_FIELDS.put("shouyeshushi", "operation_date");
-        TABLE_TIME_FIELDS.put("menzhenxiyichufang", "order_time");
-        TABLE_TIME_FIELDS.put("shoumamazuijilu", "anesthesia_start_time");
-        TABLE_TIME_FIELDS.put("jianyanbaogaofu", "report_time");
-        TABLE_TIME_FIELDS.put("shoushujilu", "operation_time");
-        TABLE_TIME_FIELDS.put("menzhenshuju", "visiting_date");
-        TABLE_TIME_FIELDS.put("ruyuanjilu", "admission_time");
-        TABLE_TIME_FIELDS.put("chuyuanxiaojiexin", "discharge_time");
+    /**
+     * 获取业务表的时间字段名（不含表前缀）。
+     * 查找链：BusinessSemanticRegistry.dateFields → SchemaRegistry.getDateFieldsForTable → null
+     */
+    private String getTimeFieldForTable(String table) {
+        if (table == null) return null;
+        // 1. BusinessSemanticRegistry 的 dateFields 配置
+        if (businessRegistry != null) {
+            List<String> fields = businessRegistry.getDateFields(table);
+            if (fields != null && !fields.isEmpty()) {
+                return fields.get(0);
+            }
+        }
+        // 2. SchemaRegistry 的 date 字段探测
+        if (schemaRegistry != null) {
+            List<String> fields = schemaRegistry.getDateFieldsForTable(table);
+            if (fields != null && !fields.isEmpty()) {
+                // 返回去掉表前缀的部分
+                String fullField = fields.get(0);
+                String prefix = table + ".";
+                return fullField.startsWith(prefix) ? fullField.substring(prefix.length()) : fullField;
+            }
+        }
+        return null;
+    }
+
+    /** 判断表是否为 nested 类型 */
+    private boolean isNestedTable(String table) {
+        if (table == null) return false;
+        if (schemaRegistry != null) {
+            return schemaRegistry.getNestedPaths().contains(table);
+        }
+        return false;
     }
 
     // ========================================================================
     // 构造 & 模板加载
     // ========================================================================
 
-    public TemplateEngine(SchemaRegistry schemaRegistry) {
+    public TemplateEngine(SchemaRegistry schemaRegistry, BusinessSemanticRegistry businessRegistry) {
         this.schemaRegistry = schemaRegistry;
+        this.businessRegistry = businessRegistry;
         this.allTemplates = loadTemplates();
         indexTemplates();
-        log.info("TemplateEngine loaded {} templates for {} entity types, schema-aware={}",
+        log.info("TemplateEngine loaded {} templates for {} entity types, schema={}, business={}",
                 allTemplates.size(), templatesByEntityType.size(),
-                schemaRegistry != null);
+                schemaRegistry != null, businessRegistry != null);
     }
 
     // ========================================================================
@@ -158,19 +156,17 @@ public class TemplateEngine {
         if (!timeValues.isEmpty()) {
             if (!activeTables.isEmpty()) {
                 for (String table : activeTables) {
-                    if (TABLE_TIME_FIELDS.containsKey(table)) {
-                        String timeField = TABLE_TIME_FIELDS.get(table);
-                        if (timeField != null) {
-                            for (SemanticIR.Entity tv : timeValues) {
-                                SemanticIR.Entity te = new SemanticIR.Entity("time", tv.getValue());
-                                te.setUnit(tv.getUnit());
-                                te.setTimeType(tv.getTimeType());
-                                te.setClauseType("range");
-                                te.setTable(table);
-                                te.setField(table + "." + timeField);
-                                setContext(te, table);
-                                resolved.add(te);
-                            }
+                    String timeField = getTimeFieldForTable(table);
+                    if (timeField != null) {
+                        for (SemanticIR.Entity tv : timeValues) {
+                            SemanticIR.Entity te = new SemanticIR.Entity("time", tv.getValue());
+                            te.setUnit(tv.getUnit());
+                            te.setTimeType(tv.getTimeType());
+                            te.setClauseType("range");
+                            te.setTable(table);
+                            te.setField(table + "." + timeField);
+                            setContext(te, table);
+                            resolved.add(te);
                         }
                     }
                 }
@@ -178,14 +174,15 @@ public class TemplateEngine {
                 // 只有诊断查询 → 时间作用到诊断表的 diagnosis_time
                 String[] diagTables = {"shouyezhenduan", "menzhenzhenduan"};
                 for (String dt : diagTables) {
-                    if (TABLE_TIME_FIELDS.containsKey(dt)) {
+                    String timeField = getTimeFieldForTable(dt);
+                    if (timeField != null) {
                         for (SemanticIR.Entity tv : timeValues) {
                             SemanticIR.Entity te = new SemanticIR.Entity("time", tv.getValue());
                             te.setUnit(tv.getUnit());
                             te.setTimeType(tv.getTimeType());
                             te.setClauseType("range");
                             te.setTable(dt);
-                            te.setField(dt + "." + TABLE_TIME_FIELDS.get(dt));
+                            te.setField(dt + "." + timeField);
                             setContext(te, dt);
                             resolved.add(te);
                         }
@@ -209,8 +206,8 @@ public class TemplateEngine {
                     break;
                 }
             }
-            if (aggTable != null && TABLE_TIME_FIELDS.containsKey(aggTable)) {
-                String dateField = TABLE_TIME_FIELDS.get(aggTable);
+            if (aggTable != null && getTimeFieldForTable(aggTable) != null) {
+                String dateField = getTimeFieldForTable(aggTable);
                 agg.setField(aggTable + "." + dateField);
                 // 记录 nestedPath（nested 表需要包 nested aggregation）
                 if (schemaRegistry != null && schemaRegistry.getNestedPaths().contains(aggTable)) {
@@ -269,12 +266,7 @@ public class TemplateEngine {
     /** 设置 entity 的 context 和 contextPath（基于表名是否在 nested 列表中） */
     private void setContext(SemanticIR.Entity entity, String table) {
         if (table == null) return;
-        boolean isNested = false;
-        if (schemaRegistry != null) {
-            isNested = schemaRegistry.getNestedPaths().contains(table);
-        } else {
-            isNested = NESTED_TABLES.contains(table);
-        }
+        boolean isNested = isNestedTable(table);
         if (isNested) {
             entity.setContext("NESTED");
             entity.setContextPath(table);
@@ -290,13 +282,10 @@ public class TemplateEngine {
         String type = entity.getType();
         String value = entity.getValue();
 
-        // 1. 类别词 → exists（lab_item/medicine/surgery 的值命中 CATEGORY_WORDS）
+        // 1. 类别词 → exists（lab_item/medicine/surgery 的值命中业务表别名）
         if (value != null && !value.isEmpty()
                 && ("lab_item".equals(type) || "medicine".equals(type) || "surgery".equals(type))) {
-            String existsField = CATEGORY_WORDS.get(value);
-            if (existsField == null && schemaRegistry != null) {
-                existsField = schemaRegistry.findTableByAlias(value);
-            }
+            String existsField = resolveTableName(value);
             if (existsField != null) {
                 entity.setClauseType("exists");
                 entity.setTable(existsField);
@@ -308,14 +297,18 @@ public class TemplateEngine {
 
         // 2. report_type → value 路由
         if ("report_type".equals(type) && value != null) {
-            String table = resolveReportTypeTable(value);
-            if (table == null && schemaRegistry != null) {
-                table = schemaRegistry.findTableByAlias(value);
-            }
+            String table = resolveTableName(value);
             if (table != null) {
                 entity.setClauseType("exists");
                 entity.setTable(table);
-                entity.setField(table);
+                // 对于 object 类型的表（非 nested），使用具体时间字段代替表名，
+                // 避免匹配到只有元数据的空壳记录（如 ruyuanjilu: 153条 vs 实际107条）
+                String dateField = getTimeFieldForTable(table);
+                if (dateField != null && !isNestedTable(table)) {
+                    entity.setField(table + "." + dateField);
+                } else {
+                    entity.setField(table);
+                }
                 setContext(entity, table);
                 return entity;
             }
@@ -362,14 +355,18 @@ public class TemplateEngine {
         String value = entity.getValue();
 
         if (value != null && !value.isEmpty() && ("lab_item".equals(type) || "medicine".equals(type) || "surgery".equals(type))) {
-            String existsField = CATEGORY_WORDS.get(value);
+            String existsField = resolveTableName(value);
             if (existsField != null) {
                 return buildExistsNodeForField(existsField);
             }
         }
 
         if ("report_type".equals(type) && value != null) {
-            return buildReportTypeNode(value);
+            String table = resolveTableName(value);
+            if (table != null) {
+                return buildExistsNodeForField(table);
+            }
+            return buildFallback(entity);
         }
 
         List<QueryTemplate> candidates = templatesByEntityType.getOrDefault(type, Collections.emptyList());
@@ -385,75 +382,9 @@ public class TemplateEngine {
     // 内部工具方法
     // ========================================================================
 
-    /** report_type 值 → 表名 */
-    private String resolveReportTypeTable(String value) {
-        switch (value) {
-            case "lab":
-            case "检验":
-            case "检验报告":
-            case "化验":
-                return "jianyanbaogaofu";
-            case "exam":
-            case "检查":
-            case "检查报告":
-            case "辅助检查":
-            case "辅助检查结果":
-                return "jianchabaogaofu";
-            case "检验检查":
-                return "jianyanbaogaofu";
-            case "surgery":
-            case "手术":
-                return "shoushujilu";
-            case "pathology":
-            case "病理":
-            case "病理报告":
-                return "binglizhenduan";
-            case "outpatient":
-            case "门诊":
-            case "门诊就诊":
-            case "门诊就诊记录":
-                return "menzhenjiuzhenjilu";
-            case "prescription":
-            case "处方":
-            case "处方记录":
-            case "药品":
-            case "用药":
-                return "menzhenxiyichufang";
-            case "discharge":
-            case "出院小结":
-                return "chuyuanxiaojiexin";
-            case "admission":
-            case "入院记录":
-                return "ruyuanjilu";
-            case "temperature":
-            case "体温":
-            case "体温单":
-            case "体温记录":
-                return "hulitizhengyangli";
-            case "frontpage":
-            case "病案首页":
-                return "binganshouye";
-            case "frontpage_diag":
-            case "首页诊断":
-                return "shouyezhenduan";
-            default:
-                String table = CATEGORY_WORDS.get(value);
-                if (table != null) return table;
-                log.warn("Unknown report_type value '{}'", value);
-                return null;
-        }
-    }
-
     // ========================================================================
     // 以下为旧 buildNode 所需方法（兼容阶段，后续随 buildNode 一起删除）
     // ========================================================================
-
-    private static final Set<String> NESTED_TABLES = new HashSet<>(Arrays.asList(
-        "jianyanbaogaofu", "shoushujilu", "menzhenxiyichufang",
-        "shouyezhenduan", "menzhenshuju", "structureddatafu",
-        "binglizhenduan", "jianchabaogaofu", "menzhenzhenduan",
-        "chuyuanxiaojiexin", "hulitizhengyangli"
-    ));
 
     private QueryNode applyTemplate(QueryTemplate template, SemanticIR.Entity entity) {
         String strategyType = template.getStrategy().getType();
@@ -540,7 +471,7 @@ public class TemplateEngine {
     }
 
     private QueryNode buildExistsNodeForField(String field) {
-        boolean isNested = field.contains(".") || NESTED_TABLES.contains(field);
+        boolean isNested = field.contains(".") || isNestedTable(field);
         QueryNode.ExistsNode exists = new QueryNode.ExistsNode();
         exists.setField(field);
 
@@ -553,14 +484,6 @@ public class TemplateEngine {
             return nested;
         }
         return exists;
-    }
-
-    private QueryNode buildReportTypeNode(String value) {
-        String table = resolveReportTypeTable(value);
-        if (table == null) {
-            return new QueryNode.MatchPhraseNode("total_src", value);
-        }
-        return buildExistsNodeForField(table);
     }
 
     private String extractTable(String field) {

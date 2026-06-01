@@ -96,8 +96,8 @@ public class ASTBuilder {
 
             switch (agg.getType()) {
                 case "count":
-                    aggNode.setType("terms");
-                    aggNode.setField("_index");
+                    // count 类型由 EsMindCompiler 直接走 _count API，不需要 DSL aggregation
+                    aggNode = null;
                     break;
                 case "date_histogram":
                     aggNode.setType("date_histogram");

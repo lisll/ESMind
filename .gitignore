@@ -9,3 +9,4 @@ dependency-reduced-pom.xml
 # Downloaded model data (extract/postStructuring)
 extract-model.json
 poststruct-model.json
+repomix-output.xml

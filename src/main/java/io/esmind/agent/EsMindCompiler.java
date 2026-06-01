@@ -260,6 +260,10 @@ public class EsMindCompiler {
         return response;
     }
 
+    // Getter for debug endpoints
+    public SemanticParser getSemanticParser() { return semanticParser; }
+    public TemplateEngine getTemplateEngine() { return templateEngine; }
+
     // ===== Response =====
 
     public static class QueryResponse {

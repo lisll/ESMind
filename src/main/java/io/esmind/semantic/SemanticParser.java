@@ -3,6 +3,7 @@ package io.esmind.semantic;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
+import io.esmind.compiler.BusinessSemanticRegistry;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.compiler.SchemaField;
 import org.slf4j.Logger;
@@ -14,8 +15,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
-import java.util.stream.Collectors;
-
+import java.net.URI;
 public class SemanticParser {
 
     private static final Logger log = LoggerFactory.getLogger(SemanticParser.class);
@@ -26,12 +26,13 @@ public class SemanticParser {
     private final String modelName;
     private final HttpClient httpClient;
     private final SchemaRegistry schemaRegistry;
+    private final BusinessSemanticRegistry businessRegistry;
 
     private static final String SYSTEM_PROMPT =
         "你是一个医疗查询解析器。将用户的查询转为结构化JSON。\n\n"
         + "规则：\n"
         + "1. 只输出 JSON，不要解释，只输出顶层对象（不要 subQueries 字段）\n"
-        + "2. intent: patient_search 或 patient_count\n"
+        + "2. intent: patient_search 或 patient_count。当 intent=patient_count 时，MUST 同时包含 aggregation: {type: 'count'}\n"
         + "3. entities 中的 type 只从以下选择：disease, symptom, department, lab_item, patient_id, medicine, surgery, exam_item, report_type, time\n"
         + "4. report_type 表示查询类别，不要将类别词放到 lab_item 中。值包括：\n"
         + "   lab=检验报告/化验, exam=检查报告/辅助检查, surgery=手术, pathology=病理\n"
@@ -80,17 +81,27 @@ public class SemanticParser {
         + "示例11: \"患者002499899700近7天的检查报告\"\n"
         + "输出: {\"intent\":\"patient_search\",\"entities\":[{\"type\":\"patient_id\",\"value\":\"002499899700\"},{\"type\":\"report_type\",\"value\":\"exam\"},{\"type\":\"time\",\"timeType\":\"RELATIVE\",\"value\":\"7\",\"unit\":\"day\"}]}\n\n"
         + "示例12: \"ES中有多少门诊就诊记录，分布在哪些月份\"\n"
-        + "输出: {\"intent\":\"patient_search\",\"entities\":[{\"type\":\"report_type\",\"value\":\"outpatient\"}],\"aggregation\":{\"type\":\"date_histogram\",\"interval\":\"month\",\"format\":\"yyyy-MM\",\"name\":\"visit_by_month\"}}";
+        + "输出: {\"intent\":\"patient_search\",\"entities\":[{\"type\":\"report_type\",\"value\":\"outpatient\"}],\"aggregation\":{\"type\":\"date_histogram\",\"interval\":\"month\",\"format\":\"yyyy-MM\",\"name\":\"visit_by_month\"}}\n\n"
+        + "示例13: \"最近一个月有多少门诊患者\"\n"
+        + "输出: {\"intent\":\"patient_count\",\"entities\":[{\"type\":\"report_type\",\"value\":\"outpatient\"},{\"type\":\"time\",\"timeType\":\"RELATIVE\",\"value\":\"30\",\"unit\":\"day\"}],\"aggregation\":{\"type\":\"count\"}}\n\n"
+        + "示例14: \"高血压患者最近一个月的门诊记录\"\n"
+        + "输出: {\"intent\":\"patient_search\",\"entities\":[{\"type\":\"disease\",\"value\":\"高血压\"},{\"type\":\"report_type\",\"value\":\"outpatient\"},{\"type\":\"time\",\"timeType\":\"RELATIVE\",\"value\":\"30\",\"unit\":\"day\"}]}\n\n";
 
     public SemanticParser(String apiUrl, String apiKey, String modelName) {
-        this(apiUrl, apiKey, modelName, null);
+        this(apiUrl, apiKey, modelName, null, null);
     }
 
     public SemanticParser(String apiUrl, String apiKey, String modelName, SchemaRegistry schemaRegistry) {
+        this(apiUrl, apiKey, modelName, schemaRegistry, null);
+    }
+
+    public SemanticParser(String apiUrl, String apiKey, String modelName,
+                          SchemaRegistry schemaRegistry, BusinessSemanticRegistry businessRegistry) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.schemaRegistry = schemaRegistry;
+        this.businessRegistry = businessRegistry;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -164,47 +175,71 @@ public class SemanticParser {
     }
 
     /**
-     * 从 SchemaRegistry 生成紧凑的业务表列表，注入到 LLM prompt。
-     * 只输出 Top-Level 业务表（nested/object），不输出全量 224 个字段。
+     * 从 BusinessSemanticRegistry 生成核心业务表列表，注入到 LLM prompt。
+     * 只输出 20+ 核心业务表（带业务名称），不输出全量 159+ nested 表。
      */
     private String buildSchemaSection() {
+        if (businessRegistry == null || !businessRegistry.isLoaded()) {
+            // 无业务注册表时退回 schemaRegistry 精简模式
+            return buildLegacySchemaSection();
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append("当前 ES 索引中的业务表（report_type 的取值参考表名）：\\n");
+
+        for (Map.Entry<String, BusinessSemanticRegistry.TableSemantic> entry
+                : businessRegistry.getTableConfigs().entrySet()) {
+            String tableName = entry.getKey();
+            BusinessSemanticRegistry.TableSemantic sem = entry.getValue();
+            sb.append("- ").append(tableName);
+            if (sem.getBusinessName() != null) {
+                sb.append(" (").append(sem.getBusinessName()).append(")");
+            }
+            List<String> dateFields = sem.getDateFields();
+            if (dateFields != null && !dateFields.isEmpty()) {
+                String dateStr = String.join(", ", dateFields);
+                sb.append(" [date: ").append(dateStr).append("]");
+            }
+            sb.append("\\n");
+        }
+
+        sb.append("\\nreport_type 的值可以使用上表中的表名（如 ")
+          .append("binganshouye").append("、")
+          .append("shouyezhenduan").append("等）。");
+        return sb.toString();
+    }
+
+    /**
+     * 无 BusinessSemanticRegistry 时的回退方案：从 SchemaRegistry 生成精简表列表。
+     */
+    private String buildLegacySchemaSection() {
         if (schemaRegistry == null) return "";
         StringBuilder sb = new StringBuilder();
-        sb.append("当前 ES 索引中的业务表：\n");
+        sb.append("当前 ES 索引中的业务表：\\n");
 
-        // 收集所有顶层业务表（nested + object）
         Set<String> tables = new LinkedHashSet<>();
-
-        // 1. Nested 表
         tables.addAll(schemaRegistry.getNestedPaths());
-
-        // 2. Object 表（顶层字段，无 '.'，且不是 text/keyword/date 等叶类型）
         for (SchemaField f : schemaRegistry.getAllFields()) {
             if (f.getFieldName().contains(".")) continue;
             String type = f.getType();
-            if ("nested".equals(type)) continue; // 已在上面
+            if ("nested".equals(type)) continue;
             if ("object".equals(type) || (!"text".equals(type) && !"keyword".equals(type)
                     && !"date".equals(type) && type != null)) {
                 tables.add(f.getFieldName());
             }
         }
 
+        int count = 0;
         for (String table : tables) {
-            boolean isNested = schemaRegistry.getNestedPaths().contains(table);
-            sb.append("- ").append(table);
-            sb.append(" (").append(isNested ? "nested" : "object").append(")");
-            List<String> dateFields = schemaRegistry.getDateFieldsForTable(table);
-            if (dateFields != null && !dateFields.isEmpty()) {
-                String dateStr = dateFields.stream()
-                        .map(df -> df.replace(table + ".", ""))
-                        .limit(3)
-                        .collect(Collectors.joining(", "));
-                sb.append(" [date: ").append(dateStr).append("]");
+            if (count >= 30) {
+                sb.append("- ... 以及 ").append(tables.size() - 30).append(" 个其他表\\n");
+                break;
             }
-            sb.append("\n");
+            sb.append("- ").append(table).append("\\n");
+            count++;
         }
 
-        sb.append("\nreport_type 的值可以直接使用上表中的表名（如 shouyezhenduan）。");
+        sb.append("\\nreport_type 的值推荐使用短名称：lab, exam, surgery, pathology, outpatient, ")
+          .append("prescription, discharge, admission, temperature, frontpage, frontpage_diag。");
         return sb.toString();
     }
 }

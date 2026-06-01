@@ -126,6 +126,17 @@ public class SchemaRegistry {
     public String getIndexName() { return indexName; }
     public int size() { return fieldsByName.size(); }
 
+    /** 获取所有顶层业务表的名称列表 */
+    public List<String> getTopLevelTableNames() {
+        List<String> result = new ArrayList<>();
+        for (SchemaField f : fieldsByName.values()) {
+            if (isTopLevelTable(f)) {
+                result.add(f.getFieldName());
+            }
+        }
+        return result;
+    }
+
     /**
      * 通过中文别名查找顶层业务表（nested/object 表名）。
      * 匹配优先级：精确bizName → 包含bizName → 字段名包含alias → 字段名被alias包含
@@ -182,7 +193,7 @@ public class SchemaRegistry {
     }
 
     /** 判断是否为顶层业务表（nested 或 object 类型的顶级字段） */
-    private boolean isTopLevelTable(SchemaField f) {
+    public boolean isTopLevelTable(SchemaField f) {
         if (f == null) return false;
         // 顶层表：没有父路径（nestedPath==null）且自身是 nested/object
         return f.getNestedPath() == null

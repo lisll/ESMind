@@ -1,7 +1,12 @@
 package io.esmind;
 
+import io.esmind.agent.MedicalQueryAgent;
+import io.esmind.agent.MedicalQueryTool;
+import io.esmind.agent.MedicalToolGroup;
 import io.esmind.ast.ASTBuilder;
+import io.esmind.compiler.BusinessSemanticRegistry;
 import io.esmind.compiler.EsRestClient;
+import io.esmind.compiler.QueryPlanner;
 import io.esmind.compiler.SchemaLoader;
 import io.esmind.compiler.SchemaRegistry;
 import io.esmind.renderer.DSLRenderer;
@@ -115,18 +120,21 @@ public class EsMindWebApplication {
          */
         @Bean
         SemanticParser semanticParser(@Qualifier("esmindProperties") Properties props,
-                                      SchemaRegistry schemaRegistry) {
+                                      SchemaRegistry schemaRegistry,
+                                      BusinessSemanticRegistry businessSemanticRegistry) {
             String baseUrl = props.getProperty(PROP_BASE_URL, DEFAULT_BASE_URL);
             String apiKey = resolveSecret(props.getProperty(PROP_API_KEY, ""), ENV_API_KEY);
             String modelName = props.getProperty(PROP_MODEL, DEFAULT_MODEL);
-            log.info("SemanticParser initialized: model={} @ {} (schema={})",
-                    modelName, baseUrl, schemaRegistry != null ? schemaRegistry.size() + " fields" : "none");
-            return new SemanticParser(baseUrl, apiKey, modelName, schemaRegistry);
+            log.info("SemanticParser initialized: model={} @ {} (schema={}, business={})",
+                    modelName, baseUrl, schemaRegistry != null ? schemaRegistry.size() + " fields" : "none",
+                    businessSemanticRegistry != null ? businessSemanticRegistry.size() + " tables" : "none");
+            return new SemanticParser(baseUrl, apiKey, modelName, schemaRegistry, businessSemanticRegistry);
         }
 
         @Bean
-        TemplateEngine queryTemplateEngine(SchemaRegistry schemaRegistry) {
-            return new TemplateEngine(schemaRegistry);
+        TemplateEngine queryTemplateEngine(SchemaRegistry schemaRegistry,
+                                           BusinessSemanticRegistry businessSemanticRegistry) {
+            return new TemplateEngine(schemaRegistry, businessSemanticRegistry);
         }
 
         @Bean
@@ -155,6 +163,69 @@ public class EsMindWebApplication {
         @Bean
         String esmindIndexName(@Qualifier("esmindProperties") Properties props) {
             return props.getProperty(PROP_ES_INDEX);
+        }
+
+        /**
+         * BusinessSemanticRegistry — 从 table-semantic.yaml 加载 20+ 核心表语义。
+         * 找不到的表走 SchemaRegistry 兜底。
+         */
+        @Bean
+        BusinessSemanticRegistry businessSemanticRegistry() {
+            return new BusinessSemanticRegistry();
+        }
+
+        /**
+         * QueryPlanner — 查询复杂度评估。
+         * 判断当前查询能否压成单一 DSL，还是需要多步执行。
+         */
+        @Bean
+        QueryPlanner queryPlanner(SchemaRegistry schemaRegistry,
+                                  BusinessSemanticRegistry businessSemanticRegistry) {
+            return new QueryPlanner(schemaRegistry, businessSemanticRegistry);
+        }
+
+        /**
+         * MedicalQueryTool — 单一 @Tool，封装 v2 Compiler 管线。
+         */
+        @Bean
+        MedicalQueryTool medicalQueryTool(SemanticParser semanticParser,
+                                          TemplateEngine templateEngine,
+                                          DSLRenderer dslRenderer,
+                                          QueryValidator queryValidator,
+                                          EsRestClient esRestClient,
+                                          ResultTransformer resultTransformer,
+                                          @Qualifier("esmindIndexName") String indexName,
+                                          SchemaRegistry schemaRegistry) {
+            return new MedicalQueryTool(
+                    semanticParser, templateEngine,
+                    dslRenderer, queryValidator,
+                    esRestClient, resultTransformer,
+                    indexName, schemaRegistry
+            );
+        }
+
+        /**
+         * MedicalToolGroup — 动态 Tool Group 描述生成器。
+         */
+        @Bean
+        MedicalToolGroup medicalToolGroup(BusinessSemanticRegistry businessSemanticRegistry) {
+            return new MedicalToolGroup(businessSemanticRegistry);
+        }
+
+        /**
+         * MedicalQueryAgent — AgentScope 代理服务。
+         * 使用 HarnessAgent + MedicalQueryTool 处理语义查询。
+         */
+        @Bean
+        MedicalQueryAgent medicalQueryAgent(@Qualifier("esmindProperties") Properties props,
+                                            MedicalQueryTool medicalQueryTool,
+                                            MedicalToolGroup medicalToolGroup) {
+            String baseUrl = props.getProperty(PROP_BASE_URL, DEFAULT_BASE_URL);
+            String apiKey = resolveSecret(props.getProperty(PROP_API_KEY, ""), ENV_API_KEY);
+            String modelName = props.getProperty(PROP_MODEL, DEFAULT_MODEL);
+            log.info("MedicalQueryAgent initialized: model={} @ {}", modelName, baseUrl);
+            return new MedicalQueryAgent(baseUrl, apiKey, modelName,
+                    medicalQueryTool, medicalToolGroup.getDescription());
         }
     }
 
