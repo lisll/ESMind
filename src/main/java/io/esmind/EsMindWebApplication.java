@@ -1,5 +1,6 @@
 package io.esmind;
 
+import io.esmind.agent.EsMindCompiler;
 import io.esmind.agent.MedicalQueryAgent;
 import io.esmind.agent.MedicalQueryTool;
 import io.esmind.agent.MedicalToolGroup;
@@ -15,6 +16,7 @@ import io.esmind.renderer.ResultTransformer;
 import io.esmind.semantic.SemanticParser;
 import io.esmind.template.TemplateEngine;
 import io.esmind.validator.QueryValidator;
+import io.esmind.workflow.WorkflowEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -215,6 +217,26 @@ public class EsMindWebApplication {
         }
 
         /**
+         * EsMindCompiler — 共享的编译器实例，给 ChatController 和 WorkflowEngine 共用。
+         */
+        @Bean
+        EsMindCompiler esMindCompiler(SemanticParser semanticParser,
+                                      TemplateEngine templateEngine,
+                                      DSLRenderer dslRenderer,
+                                      QueryValidator queryValidator,
+                                      EsRestClient esRestClient,
+                                      ResultTransformer resultTransformer,
+                                      @Qualifier("esmindIndexName") String indexName,
+                                      SchemaRegistry schemaRegistry) {
+            return new EsMindCompiler(
+                    semanticParser, templateEngine,
+                    dslRenderer, queryValidator,
+                    esRestClient, resultTransformer,
+                    indexName, schemaRegistry
+            );
+        }
+
+        /**
          * MedicalToolGroup — 动态 Tool Group 描述生成器。
          */
         @Bean
@@ -236,6 +258,20 @@ public class EsMindWebApplication {
             log.info("MedicalQueryAgent initialized: model={} @ {}", modelName, baseUrl);
             return new MedicalQueryAgent(baseUrl, apiKey, modelName,
                     medicalQueryTool, medicalToolGroup.getDescription());
+        }
+
+        /**
+         * WorkflowEngine — 多步工作流执行引擎（Phase 3）。
+         * 处理 pivot 模式等无法用单 DSL 表达的查询。
+         */
+        @Bean
+        WorkflowEngine workflowEngine(EsMindCompiler esMindCompiler,
+                                      EsRestClient esRestClient,
+                                      @Qualifier("esmindIndexName") String indexName,
+                                      SchemaRegistry schemaRegistry,
+                                      TemplateEngine templateEngine) {
+            log.info("WorkflowEngine initialized");
+            return new WorkflowEngine(esMindCompiler, esRestClient, indexName, schemaRegistry, templateEngine);
         }
     }
 

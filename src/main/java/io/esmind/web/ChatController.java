@@ -3,15 +3,9 @@ package io.esmind.web;
 import io.esmind.agent.ConfidenceGate;
 import io.esmind.agent.EsMindCompiler;
 import io.esmind.agent.MedicalQueryAgent;
-import io.esmind.ast.ASTBuilder;
-import io.esmind.compiler.EsRestClient;
-import io.esmind.compiler.SchemaRegistry;
-import io.esmind.renderer.DSLRenderer;
-import io.esmind.renderer.ResultTransformer;
 import io.esmind.semantic.SemanticIR;
-import io.esmind.semantic.SemanticParser;
-import io.esmind.template.TemplateEngine;
-import io.esmind.validator.QueryValidator;
+import io.esmind.workflow.PatternDetector;
+import io.esmind.workflow.WorkflowEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -33,26 +27,19 @@ public class ChatController {
     private final EsMindCompiler compiler;
     private final ConfidenceGate confidenceGate;
     private final MedicalQueryAgent agent;
+    private final WorkflowEngine workflowEngine;
+    private final PatternDetector patternDetector;
 
-    public ChatController(SchemaRegistry schemaRegistry,
-                          SemanticParser semanticParser,
-                          TemplateEngine templateEngine,
-                          ASTBuilder astBuilder,
-                          DSLRenderer dslRenderer,
-                          QueryValidator queryValidator,
-                          EsRestClient esRestClient,
-                          ResultTransformer resultTransformer,
-                          String indexName,
-                          MedicalQueryAgent medicalQueryAgent) {
-        this.compiler = new EsMindCompiler(
-                semanticParser, templateEngine,
-                dslRenderer, queryValidator,
-                esRestClient, resultTransformer,
-                indexName, schemaRegistry
-        );
+    public ChatController(EsMindCompiler esMindCompiler,
+                          MedicalQueryAgent medicalQueryAgent,
+                          WorkflowEngine workflowEngine) {
+        this.compiler = esMindCompiler;
         this.confidenceGate = new ConfidenceGate();
         this.agent = medicalQueryAgent;
-        log.info("ChatController initialized with v2 Compiler + ConfidenceGate: index={}", indexName);
+        this.workflowEngine = workflowEngine;
+        this.patternDetector = new PatternDetector();
+        log.info("ChatController initialized with v2 Compiler + ConfidenceGate + WorkflowEngine: index={}",
+                esMindCompiler != null ? "configured" : "?");
     }
 
     @GetMapping("/")
@@ -91,6 +78,41 @@ public class ChatController {
             return ResponseEntity.ok(result);
         }
 
+        // === Phase 3: Workflow Engine 检测 ===
+        // 先检测 TREND_COMPARE（优先级最高，因为 vs/对比 可能包含其他模式词）
+        if (patternDetector.isCompareQuery(question)) {
+            log.info("[chat] Routing to WorkflowEngine for TREND_COMPARE: {}", question);
+            long wfStart = System.currentTimeMillis();
+            WorkflowEngine.WorkflowResult wfResult = workflowEngine.execute(question);
+            long wfElapsed = System.currentTimeMillis() - wfStart;
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("elapsed_ms", wfElapsed);
+            result.put("decision", "WORKFLOW");
+            result.put("mode", "trend_compare");
+            result.put("answer", wfResult != null && wfResult.getAnswer() != null
+                    ? wfResult.getAnswer() : "查询执行失败。");
+            result.put("confidence", 0.9);
+            return ResponseEntity.ok(result);
+        }
+
+        // 再检测 PIVOT
+        if (patternDetector.isPivotQuery(question)) {
+            log.info("[chat] Routing to WorkflowEngine for PIVOT: {}", question);
+            long wfStart = System.currentTimeMillis();
+            WorkflowEngine.WorkflowResult wfResult = workflowEngine.execute(question);
+            long wfElapsed = System.currentTimeMillis() - wfStart;
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("elapsed_ms", wfElapsed);
+            result.put("decision", "WORKFLOW");
+            result.put("mode", "pivot");
+            result.put("answer", wfResult != null && wfResult.getAnswer() != null
+                    ? wfResult.getAnswer() : "查询执行失败。");
+            result.put("confidence", 0.9);
+            return ResponseEntity.ok(result);
+        }
+
         // === Normal compile ===
         EsMindCompiler.QueryResponse response = compiler.compile(question);
 
@@ -101,7 +123,13 @@ public class ChatController {
         result.put("elapsed_ms", response.getTotalElapsedMs());
         result.put("confidence", postResult.getConfidence());
 
-        if (postResult.needsCandidates()) {
+        if (postResult.isRejected()) {
+            result.put("decision", "REJECTED");
+            result.put("answer", postResult.getMessage());
+        } else if (postResult.isGreeting()) {
+            result.put("decision", "GREETING");
+            result.put("answer", postResult.getMessage());
+        } else if (postResult.needsCandidates()) {
             result.put("decision", "CANDIDATES");
             result.put("answer", postResult.getMessage());
         } else {
@@ -172,7 +200,15 @@ public class ChatController {
                 && response.getEsRawResult() != null && !response.getEsRawResult().isEmpty();
         result.put("has_detail", hasDetail);
 
-        if (postResult.needsCandidates()) {
+        if (postResult.isRejected()) {
+            result.put("decision", "REJECTED");
+            result.put("answer", postResult.getMessage());
+            result.put("has_detail", false);
+        } else if (postResult.isGreeting()) {
+            result.put("decision", "GREETING");
+            result.put("answer", postResult.getMessage());
+            result.put("has_detail", false);
+        } else if (postResult.needsCandidates()) {
             result.put("decision", "CANDIDATES");
             result.put("answer", postResult.getMessage());
             result.put("has_detail", false);

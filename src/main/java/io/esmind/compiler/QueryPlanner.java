@@ -174,18 +174,25 @@ public class QueryPlanner {
 
     /** 判断是否为多步 Workflow 任务 */
     private boolean hasWorkflowIndicators(SemanticIR ir) {
-        // 当前所有查询都是单 DSL → 没有 Workflow
-        List<SemanticIR.Entity> entities = ir.getEntities();
+        // === Phase 3: Workflow Engine 检测 ===
+        // 当前通过 query text 检测 pivot 模式（"X的患者Y"）
+        // 实际检测在 ChatController 中完成，这里只做接口占位
+        // 当需要基于 IR 内容做检测时，扩展此方法
+        return false;
+    }
 
-        // 将来可能触发 TASK 的模式：
-        // 1. "pivot" 类查询（如"查前两天发烧的患者这两天白细胞的变化"）
-        // 2. 趋势对比（"上月 vs 本月就诊人数变化"）— 两个 date_histogram
-        // 3. 患者队列筛选 + 详细记录查看（先疾病筛选再查出符合条件患者的用药明细）
-
-        // 只检测最简单的 indicator：两个不同的 aggregation
-        // 但 DSLRenderer 不支持多 aggregation，所以如果未来有多个 agg → TASK
-        // 目前不实现，留给 Phase 3
-
+    /**
+     * 基于原始 NL 查询文本检测 pivot/workflow 模式。
+     * 在 ChatController 中调用，早于 LLM 解析。
+     */
+    public boolean isPivotQuery(String nlQuery) {
+        if (nlQuery == null || nlQuery.isBlank()) return false;
+        // "X的患者Y" — 典型的 pivot 模式
+        String[] parts = nlQuery.split("的患者", 2);
+        if (parts.length == 2 && !parts[0].trim().isEmpty() && !parts[1].trim().isEmpty()) {
+            log.info("QueryPlanner: PIVOT detected: '{}' → '{}'", parts[0].trim(), parts[1].trim());
+            return true;
+        }
         return false;
     }
 
