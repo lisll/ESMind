@@ -4,10 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator;
 import io.esmind.compiler.BusinessSemanticRegistry;
+import io.esmind.compiler.EsRestClient;
 import io.esmind.compiler.SchemaExplorer;
 import io.esmind.compiler.TableMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -36,9 +38,15 @@ public class SemanticCatalogService {
 
     private final SchemaExplorer schemaExplorer;
     private final BusinessSemanticRegistry businessRegistry;
+    private final EsRestClient esClient;
+    private final String indexName;
 
     /** YAML 源文件路径（classpath 源，开发时可写） */
     private final String yamlSourcePath;
+
+    /** ES 文档数缓存（按需加载，过期不刷新） */
+    private volatile Map<String, Long> esCountCache;
+    private volatile boolean esCountLoaded = false;
 
     /** 已知分类的中文显示名 */
     private static final Map<String, String> CATEGORY_CN = new LinkedHashMap<>();
@@ -244,9 +252,13 @@ public class SemanticCatalogService {
     }
 
     public SemanticCatalogService(SchemaExplorer schemaExplorer,
-                                  BusinessSemanticRegistry businessRegistry) {
+                                  BusinessSemanticRegistry businessRegistry,
+                                  EsRestClient esClient,
+                                  @Qualifier("esmindIndexName") String indexName) {
         this.schemaExplorer = schemaExplorer;
         this.businessRegistry = businessRegistry;
+        this.esClient = esClient;
+        this.indexName = indexName;
 
         // 定位 YAML 源文件路径
         String srcPath = findYamlSourcePath();
@@ -395,8 +407,44 @@ public class SemanticCatalogService {
         item.setReason(meta.getSuggestionReason());
         item.setInYaml(yamlTables.contains(meta.getTableName()));
         item.setSuggestedBusinessName(generateBusinessName(meta.getTableName(), meta));
+        // ES 文档数（如果有缓存的话）
+        if (esCountLoaded && esCountCache != null) {
+            Long count = esCountCache.get(meta.getTableName());
+            item.setEsCount(count != null ? count : 0);
+        } else {
+            item.setEsCount(-1); // -1 = not loaded yet
+        }
         return item;
     }
+
+    /**
+     * 批量查询全部表的 ES 文档数并缓存。
+     * 返回后可通过 getAllTables() 获取带文档数的结果。
+     */
+    public synchronized void loadEsCounts() {
+        if (esCountLoaded) return;
+        List<TableMetadata> allMeta = schemaExplorer.getAllMetadata();
+        Map<String, String> tableTypes = new LinkedHashMap<>();
+        for (TableMetadata meta : allMeta) {
+            String type = "nested".equals(meta.getType()) ? "nested" : "object";
+            tableTypes.put(meta.getTableName(), type);
+        }
+        try {
+            esCountCache = esClient.batchCount(indexName, tableTypes);
+            esCountLoaded = true;
+            log.info("SemanticCatalog: loaded ES counts for {} tables", esCountCache.size());
+        } catch (Exception e) {
+            log.error("Failed to load ES counts", e);
+            esCountCache = new LinkedHashMap<>();
+            esCountLoaded = true; // prevent retry
+        }
+    }
+
+    /**
+     * 获取 ES 文档数加载状态。
+     */
+    public boolean isEsCountLoaded() { return esCountLoaded; }
+    public Map<String, Long> getEsCountCache() { return esCountCache; }
 
     /**
      * 根据表名和自动推断的分类生成建议的业务中文名。
@@ -440,22 +488,14 @@ public class SemanticCatalogService {
 
     /**
      * 追加新表配置到 table-semantic.yaml。
+     * 同时写入两个位置：
+     * 1. src/main/resources/ 源文件（持久化，重启后保留）
+     * 2. target/classes/ 运行时 classpath（热加载立即生效）
      */
     private void appendToYaml(String tableName, String businessName,
                               List<String> aliases, List<String> categories,
                               List<String> dateFields) throws Exception {
-        File yamlFile = new File(yamlSourcePath);
-        if (!yamlFile.exists()) {
-            throw new IllegalStateException("YAML file not found: " + yamlSourcePath);
-        }
-
-        // 读取现有内容
-        String existingContent;
-        try (InputStream is = new FileInputStream(yamlFile)) {
-            existingContent = new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        }
-
-        // Append new entry BEFORE the footer comment
+        // 构造追加内容
         String footer = "# 找不到的表";
         String appendEntry = "\n  " + tableName + ":\n"
                 + "    businessName: " + businessName + "\n"
@@ -465,20 +505,37 @@ public class SemanticCatalogService {
             appendEntry += "    dateFields: [" + String.join(", ", dateFields) + "]\n";
         }
 
-        if (existingContent.contains(footer)) {
-            existingContent = existingContent.replace(footer, appendEntry + "\n" + footer);
-        } else {
-            existingContent = existingContent.trim() + "\n" + appendEntry;
+        // 写源文件 + 运行时 classpath
+        String[] writePaths = {yamlSourcePath, "target/classes/table-semantic.yaml"};
+        for (String path : writePaths) {
+            File f = new File(path);
+            if (!f.exists()) continue;
+            String content;
+            try (InputStream is = new FileInputStream(f)) {
+                content = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            }
+            if (content.contains(footer)) {
+                content = content.replace(footer, appendEntry + "\n" + footer);
+            } else {
+                content = content.trim() + "\n" + appendEntry;
+            }
+            try (OutputStreamWriter w = new OutputStreamWriter(
+                    new FileOutputStream(f), StandardCharsets.UTF_8)) {
+                w.write(content);
+                w.flush();
+            }
+            log.info("YAML updated: {} (table={})", path, tableName);
         }
 
-        // 写回
-        try (OutputStreamWriter writer = new OutputStreamWriter(
-                new FileOutputStream(yamlFile), StandardCharsets.UTF_8)) {
-            writer.write(existingContent);
-            writer.flush();
+        // 热加载：运行时注册（不依赖于文件重读）
+        if (businessRegistry != null) {
+            try {
+                businessRegistry.registerTable(tableName, businessName, aliases, categories, dateFields);
+                log.info("BusinessSemanticRegistry hot-registered: {}", tableName);
+            } catch (Exception e) {
+                log.warn("BusinessSemanticRegistry registerTable failed (non-fatal): {}", e.getMessage());
+            }
         }
-
-        log.info("YAML updated: added table '{}' as '{}'", tableName, businessName);
     }
 
     /**
@@ -529,6 +586,7 @@ public class SemanticCatalogService {
         private String reason;
         private boolean inYaml;
         private String suggestedBusinessName;
+        private long esCount = -1; // -1=未加载, 0=无数据, N=文档数
 
         public String getTableName() { return tableName; }
         public void setTableName(String v) { this.tableName = v; }
@@ -552,6 +610,8 @@ public class SemanticCatalogService {
         public void setInYaml(boolean v) { this.inYaml = v; }
         public String getSuggestedBusinessName() { return suggestedBusinessName; }
         public void setSuggestedBusinessName(String v) { this.suggestedBusinessName = v; }
+        public long getEsCount() { return esCount; }
+        public void setEsCount(long v) { this.esCount = v; }
     }
 
     /**

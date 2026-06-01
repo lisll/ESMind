@@ -43,9 +43,30 @@ public class SemanticCatalogController {
         try {
             Map<String, Object> stats = catalogService.getStats();
             stats.put("success", true);
+            stats.put("esCountLoaded", catalogService.isEsCountLoaded());
             return ResponseEntity.ok(stats);
         } catch (Exception e) {
             log.error("Error getting catalog stats", e);
+            return ResponseEntity.ok(Map.of("success", false, "error", e.getMessage()));
+        }
+    }
+
+    /**
+     * 批量加载 ES 文档数（耗时约 5-10 秒）。
+     * 加载后所有表格查询将包含文档数。
+     */
+    @PostMapping(value = "/api/semantic-catalog/load-counts", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Map<String, Object>> loadCounts() {
+        log.info("SemanticCatalog: loading ES counts...");
+        try {
+            catalogService.loadEsCounts();
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", true);
+            result.put("loaded", catalogService.isEsCountLoaded());
+            result.put("count", catalogService.getEsCountCache() != null ? catalogService.getEsCountCache().size() : 0);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("Error loading ES counts", e);
             return ResponseEntity.ok(Map.of("success", false, "error", e.getMessage()));
         }
     }

@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.InputStream;
+import java.util.*;
 
 /**
  * ES REST 客户端（精简版）。
@@ -50,6 +51,64 @@ public class EsRestClient implements AutoCloseable {
         Request req = new Request("GET", "/" + indexName + "/_count");
         JsonNode root = parseBody(client.performRequest(req));
         return root.get("count").asLong();
+    }
+
+    /**
+     * 批量查询多个表的文档数（使用 _msearch）。
+     * tableTypes: Map<表名, 类型> — "nested" 或 "object"
+     * 返回 Map<表名, 文档数>
+     */
+    public Map<String, Long> batchCount(String indexName, Map<String, String> tableTypes) throws Exception {
+        if (tableTypes == null || tableTypes.isEmpty()) return Collections.emptyMap();
+
+        List<String> names = new ArrayList<>(tableTypes.keySet());
+        StringBuilder body = new StringBuilder();
+        for (String table : names) {
+            String type = tableTypes.get(table);
+            body.append("{}\n");
+            if ("nested".equals(type)) {
+                body.append("{\"size\":0,\"query\":{\"nested\":{\"path\":\"")
+                        .append(table).append("\",\"query\":{\"match_all\":{}}}}}}\n");
+            } else {
+                body.append("{\"size\":0,\"query\":{\"exists\":{\"field\":\"")
+                        .append(table).append("\"}}}}\n");
+            }
+        }
+
+        Request req = new Request("POST", "/" + indexName + "/_msearch");
+        req.setJsonEntity(body.toString());
+        req.addParameter("filter_path", "responses.status,responses.hits.total");
+
+        JsonNode root = parseBody(client.performRequest(req));
+        Map<String, Long> result = new LinkedHashMap<>();
+        JsonNode responses = root.get("responses");
+        if (responses != null && responses.isArray()) {
+            int i = 0;
+            for (JsonNode resp : responses) {
+                String path = names.get(i);
+                int status = resp.get("status").asInt();
+                if (status == 200 && resp.has("hits")) {
+                    JsonNode total = resp.get("hits").get("total");
+                    // ES 6.x: total is number; ES 7.x+: total is {value:N, relation:"eq"}
+                    long count = total.isObject() ? total.get("value").asLong() : total.asLong();
+                    result.put(path, count);
+                } else {
+                    result.put(path, -1L);
+                }
+                i++;
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 批量查询多个 nested/object 表的文档数（使用 _msearch）。
+     * 兼容旧接口，自动按类型分组。
+     */
+    public Map<String, Long> batchCount(String indexName, Collection<String> nestedPaths) throws Exception {
+        Map<String, String> types = new LinkedHashMap<>();
+        for (String p : nestedPaths) types.put(p, "nested");
+        return batchCount(indexName, types);
     }
 
     private static JsonNode parseBody(Response resp) throws Exception {

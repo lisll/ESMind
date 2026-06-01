@@ -24,26 +24,29 @@ public class SchemaExplorer {
     private Map<String, TableMetadata> tableByName;
     private boolean explored = false;
 
-    // ===== 业务指示字段模式 → 分类映射 =====
-    // 按优先级降序排列（匹配第一个即确认分类）
+    // ===== 增强版业务指示字段模式 → 分类映射 =====
+    // 每个规则包含：
+    //   category: 唯一分类标识
+    //   chineseNames: 中文名称（用于匹配用户查询）
+    //   indicators: 字段名模式（>=6字符做子串匹配，<6字符做精确匹配）
+    //   tableNameHints: 表名关键词（匹配给 +2 分）
     private static final List<CategoryRule> CATEGORY_RULES = List.of(
-        new CategoryRule("diagnosis",     "diagnosis",       List.of("diagnosis_name")),
-        new CategoryRule("order",         "医嘱",            List.of("order_item_name", "order_class_name")),
-        new CategoryRule("lab",           "检验",            List.of("lab_item_name", "lab_sub_item_name", "norm_lab_item_name")),
-        new CategoryRule("exam",          "检查",            List.of("norm_exam_item_name", "exam_item_name")),
-        new CategoryRule("surgery",       "手术",            List.of("operation_name", "surgery_name")),
-        new CategoryRule("prescription",  "处方/药品",       List.of("drug_trade_name", "drug_generic_name", "medicine_code")),
-        new CategoryRule("discharge",     "出院",            List.of("discharge_diagnosis", "discharge_time")),
-        new CategoryRule("admission",     "入院",            List.of("admission_time", "chief_complaint")),
-        new CategoryRule("temperature",   "体温",            List.of("temperature", "vital_sign")),
-        new CategoryRule("fee",           "费用",            List.of("charge_fee", "charge_class_name", "charge_item_code")),
-        new CategoryRule("anesthesia",    "麻醉",            List.of("anesthesia_method_name", "anesthesia_doctor_code")),
-        new CategoryRule("pathology",     "病理",            List.of("pathology", "pathological")),
-        new CategoryRule("ultrasound",    "超声",            List.of("ultrasound", "chaosheng")),
-        new CategoryRule("death",         "死亡",            List.of("death", "siwang")),
-        new CategoryRule("blood",         "输血",            List.of("blood_transfusion", "blood_type", "abo_blood_type")),
-        new CategoryRule("consent",       "知情同意书",      List.of("consent", "tongyishu")),
-        new CategoryRule("nursing",       "护理",            List.of("nursing_record", "huli", "care_record"))
+        new CategoryRule("diagnosis",     "诊断",            List.of("diagnosis_name"),          List.of("zhenduan", "diagnosis")),
+        new CategoryRule("lab",           "检验",            List.of("lab_item_name", "lab_sub_item_name", "norm_lab_item_name"), List.of("jianyan", "lab")),
+        new CategoryRule("exam",          "检查",            List.of("norm_exam_item_name", "exam_item_name"), List.of("jiancha", "exam", "chaosheng", "ultrasound")),
+        new CategoryRule("order",         "医嘱",            List.of("order_item_name", "order_class_name"), List.of("yizhu")),
+        new CategoryRule("surgery",       "手术",            List.of("operation_name", "surgery_name", "anesthesia_method_name"), List.of("shoushu", "surgery", "operation")),
+        new CategoryRule("prescription",  "处方/药品",       List.of("drug_trade_name", "drug_generic_name", "medicine_code", "norm_medicine_name"), List.of("chufang", "yaopin", "prescription")),
+        new CategoryRule("discharge",     "出院",            List.of("discharge_diagnosis", "discharge_time"), List.of("chuyuan", "discharge")),
+        new CategoryRule("admission",     "入院",            List.of("admission_time", "chief_complaint"), List.of("ruyuan", "admission")),
+        new CategoryRule("fee",           "费用",            List.of("charge_fee", "charge_item_code", "charge_class_name"), List.of("feiyong", "fee")),
+        new CategoryRule("pathology",     "病理",            List.of("pathology", "pathological"), List.of("bingli", "pathology")),
+        new CategoryRule("blood",         "输血",            List.of("blood_transfusion", "blood_type", "abo_blood_type"), List.of("shuxue", "blood")),
+        new CategoryRule("temperature",   "体温",            List.of("temperature", "vital_sign"), List.of("tiwen", "temperature")),
+        new CategoryRule("nursing",       "护理",            List.of("nursing_record", "care_record"), List.of("huli", "nursing")),
+        new CategoryRule("death",         "死亡",            List.of("death_record", "death_time", "death_cause"), List.of("siwang", "death")),
+        new CategoryRule("consent",       "知情同意书",      List.of("consent_form", "informed_consent"), List.of("tongyishu", "consent")),
+        new CategoryRule("anesthesia",    "麻醉",            List.of("anesthesia_method_name", "anesthesia_start_time"), List.of("mazui", "anesthesia"))
     );
 
     public SchemaExplorer(SchemaRegistry schemaRegistry) {
@@ -261,30 +264,102 @@ public class SchemaExplorer {
 
     private void inferCategory(TableMetadata meta, Set<String> fieldNames) {
         List<String> fieldNameList = new ArrayList<>(fieldNames);
-        // 也检查短字段名（去掉表前缀）
+        // 短字段名（去掉表前缀）
         List<String> shortNames = fieldNameList.stream()
                 .map(fn -> fn.contains(".") ? fn.substring(fn.lastIndexOf('.') + 1) : fn)
                 .collect(Collectors.toList());
 
+        String tableName = meta.getTableName();
+        String tableNameLower = tableName != null ? tableName.toLowerCase() : "";
+
+        // 打分制：对所有规则评分，最高分赢
+        String bestCategory = null;
+        int bestScore = 0;
+        int bestIndicatorMatches = 0;
+        String bestReason = "";
+
         for (CategoryRule rule : CATEGORY_RULES) {
-            int matchCount = 0;
+            int score = 0;
+            int indicatorMatches = 0;
+
+            // 1. 字段名匹配
             for (String indicator : rule.indicators) {
-                for (String sn : shortNames) {
-                    if (sn.contains(indicator) || indicator.contains(sn)) {
-                        matchCount++;
-                        break;
+                boolean matched = false;
+                if (indicator.length() >= 6) {
+                    // 长模式：子串匹配
+                    for (String sn : shortNames) {
+                        if (sn.contains(indicator)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                } else {
+                    // 短模式（< 6 字符）：精确匹配或前缀匹配
+                    for (String sn : shortNames) {
+                        if (sn.equals(indicator) || sn.startsWith(indicator + "_")
+                                || sn.endsWith("_" + indicator)) {
+                            matched = true;
+                            break;
+                        }
+                    }
+                }
+                if (matched) {
+                    indicatorMatches++;
+                    score += 2;
+                }
+            }
+
+            // 2. 表名关键词匹配（+2 分每个）
+            for (String hint : rule.tableNameHints) {
+                if (tableNameLower.contains(hint)) {
+                    score += 2;
+                }
+            }
+
+            // 记录最高分（优先 indicator 匹配数多的）
+            if (score > bestScore
+                    || (score == bestScore && indicatorMatches > bestIndicatorMatches)) {
+                bestScore = score;
+                bestIndicatorMatches = indicatorMatches;
+                bestCategory = rule.category;
+
+                // 生成解释
+                if (indicatorMatches > 0) {
+                    bestReason = "包含 " + indicatorMatches + "/" + rule.indicators.size()
+                            + " 个 " + String.join("/", rule.chineseNames) + "类字段";
+                    if (!tableNameLower.isEmpty()) {
+                        for (String hint : rule.tableNameHints) {
+                            if (tableNameLower.contains(hint)) {
+                                bestReason += "，表名含关键词\"" + hint + "\"";
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    // 仅靠表名匹配
+                    for (String hint : rule.tableNameHints) {
+                        if (tableNameLower.contains(hint)) {
+                            bestReason = "表名含关键词\"" + hint + "\"";
+                            break;
+                        }
                     }
                 }
             }
-            if (matchCount > 0) {
-                String confidence = matchCount >= 2 ? "HIGH" : "MEDIUM";
-                meta.setSuggestedCategory(rule.category);
-                meta.setSuggestionConfidence(confidence);
-                meta.setSuggestionReason("包含 " + matchCount + "/" + rule.indicators.size()
-                        + " 个 " + String.join("/", rule.chineseNames) + "类字段"
-                        + ("HIGH".equals(confidence) ? "" : "（置信度一般，建议人工确认）"));
-                return;
+        }
+
+        if (bestCategory != null && bestScore > 0) {
+            String confidence;
+            if (bestIndicatorMatches >= 2 || (bestIndicatorMatches >= 1 && bestScore >= 4)) {
+                confidence = "HIGH";
+            } else if (bestIndicatorMatches >= 1) {
+                confidence = "MEDIUM";
+            } else {
+                confidence = "LOW";
             }
+            meta.setSuggestedCategory(bestCategory);
+            meta.setSuggestionConfidence(confidence);
+            meta.setSuggestionReason(bestReason + (confidence.equals("HIGH") ? "" : "（置信度一般，建议人工确认）"));
+            return;
         }
 
         // 无法推断的兜底
@@ -310,17 +385,23 @@ public class SchemaExplorer {
     }
 
     /**
-     * 分类规则：category=唯一标识, chineseNames=中文名称列表（用于匹配用户查询关键词）
+     * 分类规则：category=唯一标识, chineseNames=中文名称列表, indicators=字段名模式, tableNameHints=表名关键词
+     * <ul>
+     *   <li>indicators >= 6 字符：子串匹配（fieldName.contains(indicator)）</li>
+     *   <li>indicators < 6 字符：精确匹配（fieldName.equals(indicator) 或 fieldName.startsWith(indicator + "_")）</li>
+     * </ul>
      */
     private static class CategoryRule {
         final String category;
         final List<String> chineseNames;
-        final List<String> indicators;  // 字段名模式
+        final List<String> indicators;        // 字段名模式
+        final List<String> tableNameHints;    // 表名关键词（匹配给 +2 分）
 
-        CategoryRule(String category, String chineseName, List<String> indicators) {
+        CategoryRule(String category, String chineseName, List<String> indicators, List<String> tableNameHints) {
             this.category = category;
             this.chineseNames = List.of(chineseName.split("/"));
             this.indicators = indicators;
+            this.tableNameHints = tableNameHints;
         }
     }
 }

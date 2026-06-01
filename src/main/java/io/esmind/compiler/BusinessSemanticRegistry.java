@@ -179,6 +179,62 @@ public class BusinessSemanticRegistry {
     }
 
     // ========================================================================
+    // 重新加载
+    // ========================================================================
+
+    /**
+     * 重新从 classpath 加载 YAML 配置。
+     * 在开发模式下（mvn spring-boot:run），写入 target/classes/ 后调用此方法即可立即生效。
+     * 生产模式下（jar 内），需要重启。
+     */
+    public synchronized void reload() {
+        log.info("BusinessSemanticRegistry reloading...");
+        tableConfigs.clear();
+        aliasToTable.clear();
+        tableNames.clear();
+        loaded = false;
+        loadFromClasspath();
+        log.info("BusinessSemanticRegistry reloaded: {} tables, {} aliases",
+                tableConfigs.size(), aliasToTable.size());
+    }
+
+    /**
+     * 运行时注册一张业务表（热添加，不依赖于文件重读）。
+     * 用于 SemanticCatalog 确认后立即生效。
+     */
+    public synchronized void registerTable(String tableName, String businessName,
+                                            List<String> aliases, List<String> categories,
+                                            List<String> dateFields) {
+        if (tableConfigs.containsKey(tableName)) {
+            log.info("Table '{}' already registered, updating...", tableName);
+        }
+
+        TableSemantic semantic = new TableSemantic();
+        semantic.setTableName(tableName);
+        semantic.setBusinessName(businessName);
+        semantic.setAliases(aliases);
+        semantic.setCategories(categories);
+        semantic.setDateFields(dateFields);
+
+        tableConfigs.put(tableName, semantic);
+        if (!tableNames.contains(tableName)) {
+            tableNames.add(tableName);
+        }
+
+        // 注册别名
+        if (aliases != null) {
+            for (String alias : aliases) {
+                if (alias != null && !alias.isEmpty()) {
+                    aliasToTable.put(alias, tableName);
+                }
+            }
+        }
+        aliasToTable.put(tableName, tableName);
+
+        log.info("BusinessSemanticRegistry: registered table '{}' (businessName={})", tableName, businessName);
+    }
+
+    // ========================================================================
     // POJO
     // ========================================================================
 
