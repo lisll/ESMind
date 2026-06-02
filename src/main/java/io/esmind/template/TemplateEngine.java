@@ -2,7 +2,6 @@ package io.esmind.template;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.esmind.ast.QueryNode;
 import io.esmind.compiler.BusinessSemanticRegistry;
 import io.esmind.compiler.SchemaExplorer;
 import io.esmind.compiler.SchemaRegistry;
@@ -15,13 +14,13 @@ import java.io.InputStream;
 import java.util.*;
 
 /**
- * Template Engine — 模板加载 + Entity 解析。
+ * Template Engine — Entity 解析 + 模板映射。
  * <p>
  * 职责：
  * <ol>
- *   <li>从 templates.json 加载查询模板</li>
- *   <li>{@link #resolve(SemanticIR)} 将 LLM/FastPath 输出的部分 Entity 补全为完整 Entity</li>
- *   <li>{@link #buildNode(SemanticIR.Entity)} （待废弃）旧 AST 节点构建入口</li>
+ *   <li>从 templates.json 加载实体类型→字段映射模板</li>
+ *   <li>{@link #resolve(SemanticIR)} 将 LLM 输出的部分 Entity 补全为完整 Entity（表名、字段、clauseType）</li>
+ *   <li>时间约束自动分配到正确的业务表</li>
  * </ol>
  */
 public class TemplateEngine {
@@ -39,11 +38,11 @@ public class TemplateEngine {
     /** Runtime SchemaExplorer — 自动表发现 + 关键词匹配 fallback */
     private final SchemaExplorer schemaExplorer;
 
-    /** Runtime Business Semantic Registry — 替代 CATEGORY_WORDS / resolveReportTypeTable / TABLE_TIME_FIELDS */
+    /** Runtime Business Semantic Registry */
     private final BusinessSemanticRegistry businessRegistry;
 
     // ========================================================================
-    // 替代 CATEGORY_WORDS / TABLE_TIME_FIELDS / resolveReportTypeTable 的运行时查询
+    // 运行时查询（替代 CATEGORY_WORDS / TABLE_TIME_FIELDS / resolveReportTypeTable）
     // ========================================================================
 
     /**
@@ -124,23 +123,19 @@ public class TemplateEngine {
     }
 
     // ========================================================================
-    // Resolution — Entity 补全（核心新增）
+    // Resolution — Entity 补全（核心）
     // ========================================================================
 
     /**
      * 补全 SemanticIR 中所有 Entity 的编译字段。
      * <p>
-     * 输入：LLM 或 FastPath 输出的部分 Entity（只有 type/value）
+     * 输入：LLM 输出的部分 Entity（只有 type/value）
      * 输出：完整的 Entity（clauseType/table/field 等编译字段全部填充）
-     * <p>
-     * v2.1 改进：
-     * - disease 类型展开为住院诊断 + 门诊诊断两个 SHOULD 组合
-     * - 时间过滤只应用到主动查询表（report_type/lab_item/medicine/surgery），不应用到诊断表
      */
     public SemanticIR resolve(SemanticIR ir) {
         List<SemanticIR.Entity> resolved = new ArrayList<>();
         List<SemanticIR.Entity> timeValues = new ArrayList<>();
-        // 记录主动查询表（report_type/lab_item/medicine/surgery → 时间应作用的目标）
+        // 记录主动查询表（时间应作用的目标）
         Set<String> activeTables = new LinkedHashSet<>();
 
         // Pass 1: 解析非时间 Entity
@@ -149,7 +144,6 @@ public class TemplateEngine {
                 timeValues.add(e);
             } else if ("disease".equals(e.getType())) {
                 // 诊断 → 展开为住院+门诊两个实体，用 group 标记 SHOULD 组合
-                // 诊断表不加入 activeTables（时间不应用到诊断表）
                 List<SemanticIR.Entity> diseaseEntities = expandDisease(e);
                 for (SemanticIR.Entity de : diseaseEntities) {
                     resolved.add(de);
@@ -157,8 +151,7 @@ public class TemplateEngine {
             } else {
                 SemanticIR.Entity resolvedEntity = resolveEntity(e);
                 resolved.add(resolvedEntity);
-                // 记录主动查询表（report_type/lab_item/medicine/surgery → 时间应作用的目标）
-                // 注意：不加入诊断表，避免时间错误应用到诊断上
+                // 记录主动查询表（不加入诊断表，避免时间错误应用到诊断上）
                 if (resolvedEntity.getTable() != null
                         && !"shouyezhenduan".equals(resolvedEntity.getTable())
                         && !"menzhenshuju".equals(resolvedEntity.getTable())
@@ -168,7 +161,7 @@ public class TemplateEngine {
             }
         }
 
-        // Pass 2: 时间约束 → 只应用到主动查询表，不应用到诊断表
+        // Pass 2: 时间约束 → 只应用到主动查询表
         if (!timeValues.isEmpty()) {
             if (!activeTables.isEmpty()) {
                 for (String table : activeTables) {
@@ -209,11 +202,10 @@ public class TemplateEngine {
 
         ir.setEntities(resolved);
 
-        // Aggregation 字段自动推导（LLM 不需要输出 field）
+        // Aggregation 字段自动推导
         SemanticIR.Aggregation agg = ir.getAggregation();
         if (agg != null && (agg.getField() == null || agg.getField().isEmpty())
                 && !"count".equals(agg.getType())) {
-            // 聚合支持所有业务表（包括诊断表），不应用时间过滤器的排除逻辑
             String aggTable = null;
             for (SemanticIR.Entity e : resolved) {
                 String table = e.getTable();
@@ -225,7 +217,6 @@ public class TemplateEngine {
             if (aggTable != null && getTimeFieldForTable(aggTable) != null) {
                 String dateField = getTimeFieldForTable(aggTable);
                 agg.setField(aggTable + "." + dateField);
-                // 记录 nestedPath（nested 表需要包 nested aggregation）
                 if (schemaRegistry != null && schemaRegistry.getNestedPaths().contains(aggTable)) {
                     agg.setNestedPath(aggTable);
                 }
@@ -279,7 +270,7 @@ public class TemplateEngine {
         return e;
     }
 
-    /** 设置 entity 的 context 和 contextPath（基于表名是否在 nested 列表中） */
+    /** 设置 entity 的 context 和 contextPath */
     private void setContext(SemanticIR.Entity entity, String table) {
         if (table == null) return;
         boolean isNested = isNestedTable(table);
@@ -298,7 +289,7 @@ public class TemplateEngine {
         String type = entity.getType();
         String value = entity.getValue();
 
-        // 1. 类别词 → exists（lab_item/medicine/surgery 的值命中业务表别名）
+        // 1. 类别词 → exists
         if (value != null && !value.isEmpty()
                 && ("lab_item".equals(type) || "medicine".equals(type) || "surgery".equals(type))) {
             String existsField = resolveTableName(value);
@@ -317,8 +308,6 @@ public class TemplateEngine {
             if (table != null) {
                 entity.setClauseType("exists");
                 entity.setTable(table);
-                // 对于 object 类型的表（非 nested），使用具体时间字段代替表名，
-                // 避免匹配到只有元数据的空壳记录（如 ruyuanjilu: 153条 vs 实际107条）
                 String dateField = getTimeFieldForTable(table);
                 if (dateField != null && !isNestedTable(table)) {
                     entity.setField(table + "." + dateField);
@@ -335,12 +324,11 @@ public class TemplateEngine {
         if (!candidates.isEmpty()) {
             QueryTemplate tpl = candidates.get(0);
             QueryTemplate.Strategy s = tpl.getStrategy();
-            // 根据策略类型设置 clauseType 和 context
             String strategyType = s.getType();
             if (strategyType.startsWith("nested_")) {
                 entity.setContext("NESTED");
                 entity.setContextPath(s.getTable());
-                entity.setClauseType(strategyType.substring(7)); // "nested_term" → "term"
+                entity.setClauseType(strategyType.substring(7));
             } else {
                 entity.setContext("ROOT");
                 entity.setClauseType(strategyType);
@@ -358,154 +346,6 @@ public class TemplateEngine {
         entity.setField("total_src");
         log.warn("No template for type '{}', fallback to total_src match_phrase", type);
         return entity;
-    }
-
-    // ========================================================================
-    // 旧 buildNode 方法（兼容阶段，后续删除）
-    // ========================================================================
-
-    /** @deprecated 使用 {@link #resolveEntity(SemanticIR.Entity)} 替代 */
-    @Deprecated
-    public QueryNode buildNode(SemanticIR.Entity entity) {
-        String type = entity.getType();
-        String value = entity.getValue();
-
-        if (value != null && !value.isEmpty() && ("lab_item".equals(type) || "medicine".equals(type) || "surgery".equals(type))) {
-            String existsField = resolveTableName(value);
-            if (existsField != null) {
-                return buildExistsNodeForField(existsField);
-            }
-        }
-
-        if ("report_type".equals(type) && value != null) {
-            String table = resolveTableName(value);
-            if (table != null) {
-                return buildExistsNodeForField(table);
-            }
-            return buildFallback(entity);
-        }
-
-        List<QueryTemplate> candidates = templatesByEntityType.getOrDefault(type, Collections.emptyList());
-        if (candidates.isEmpty()) {
-            return buildFallback(entity);
-        }
-
-        QueryTemplate template = candidates.get(0);
-        return applyTemplate(template, entity);
-    }
-
-    // ========================================================================
-    // 内部工具方法
-    // ========================================================================
-
-    // ========================================================================
-    // 以下为旧 buildNode 所需方法（兼容阶段，后续随 buildNode 一起删除）
-    // ========================================================================
-
-    private QueryNode applyTemplate(QueryTemplate template, SemanticIR.Entity entity) {
-        String strategyType = template.getStrategy().getType();
-        switch (strategyType) {
-            case "term":          return buildTermNode(template, entity);
-            case "match_phrase":  return buildMatchPhraseNode(template, entity);
-            case "nested_term":   return buildNestedTermNode(template, entity);
-            case "nested_match":  return buildNestedMatchNode(template, entity);
-            case "range":         return buildRangeNode(template, entity);
-            case "exists":        return buildExistsNode(template, entity);
-            default:
-                return buildFallback(entity);
-        }
-    }
-
-    private QueryNode buildTermNode(QueryTemplate template, SemanticIR.Entity entity) {
-        String field = template.getStrategy().getKeyword();
-        if (field == null) field = template.getStrategy().getField();
-        return new QueryNode.TermNode(field, entity.getValue());
-    }
-
-    private QueryNode buildMatchPhraseNode(QueryTemplate template, SemanticIR.Entity entity) {
-        return new QueryNode.MatchPhraseNode(template.getStrategy().getField(), entity.getValue());
-    }
-
-    private QueryNode buildNestedTermNode(QueryTemplate template, SemanticIR.Entity entity) {
-        String keyword = template.getStrategy().getKeyword();
-        String targetField = keyword != null ? keyword : template.getStrategy().getField();
-        QueryNode.BoolNode boolQuery = new QueryNode.BoolNode();
-        boolQuery.addMust(new QueryNode.TermNode(targetField, entity.getValue()));
-
-        if (entity.getOperator() != null && entity.getNumericValue() != null
-                && template.getStrategy().getValueField() != null) {
-            QueryNode.RangeNode range = new QueryNode.RangeNode();
-            range.setField(template.getStrategy().getValueField());
-            switch (entity.getOperator()) {
-                case "gt":  range.setGt(entity.getNumericValue()); break;
-                case "gte": range.setGte(entity.getNumericValue()); break;
-                case "lt":  range.setLt(entity.getNumericValue()); break;
-                case "lte": range.setLte(entity.getNumericValue()); break;
-                case "eq":  range.setGte(entity.getNumericValue()); range.setLte(entity.getNumericValue()); break;
-            }
-            boolQuery.addMust(range);
-        }
-
-        QueryNode.NestedNode nested = new QueryNode.NestedNode();
-        nested.setPath(template.getStrategy().getTable());
-        nested.setQuery(boolQuery);
-        nested.setInnerHitsSize(0);
-        return nested;
-    }
-
-    private QueryNode buildNestedMatchNode(QueryTemplate template, SemanticIR.Entity entity) {
-        String value = entity.getValue();
-        QueryNode.BoolNode should = new QueryNode.BoolNode();
-        should.addShould(new QueryNode.MatchPhraseNode(template.getStrategy().getField(), value));
-
-        if (template.getStrategy().getKeyword() != null) {
-            should.addShould(new QueryNode.TermNode(template.getStrategy().getKeyword(), value));
-        }
-
-        if (template.getStrategy().isUseSynonyms()) {
-            for (String syn : SynonymDictionary.getDefault().getSynonyms(entity.getType(), value)) {
-                if (!syn.equals(value)) {
-                    should.addShould(new QueryNode.MatchPhraseNode(template.getStrategy().getField(), syn));
-                }
-            }
-        }
-
-        should.setMinimumShouldMatch(1);
-        QueryNode.NestedNode nested = new QueryNode.NestedNode();
-        nested.setPath(template.getStrategy().getTable());
-        nested.setQuery(should);
-        nested.setInnerHitsSize(0);
-        return nested;
-    }
-
-    private QueryNode buildRangeNode(QueryTemplate template, SemanticIR.Entity entity) { return null; }
-    private QueryNode buildFallback(SemanticIR.Entity entity) {
-        return new QueryNode.MatchPhraseNode("total_src", entity.getValue());
-    }
-    private QueryNode buildExistsNode(QueryTemplate template, SemanticIR.Entity entity) {
-        return buildExistsNodeForField(template.getStrategy().getField());
-    }
-
-    private QueryNode buildExistsNodeForField(String field) {
-        boolean isNested = field.contains(".") || isNestedTable(field);
-        QueryNode.ExistsNode exists = new QueryNode.ExistsNode();
-        exists.setField(field);
-
-        if (isNested) {
-            String path = extractTable(field);
-            QueryNode.NestedNode nested = new QueryNode.NestedNode();
-            nested.setPath(path != null ? path : field);
-            nested.setQuery(exists);
-            nested.setInnerHitsSize(0);
-            return nested;
-        }
-        return exists;
-    }
-
-    private String extractTable(String field) {
-        if (field == null) return null;
-        int dot = field.indexOf('.');
-        return dot > 0 ? field.substring(0, dot) : null;
     }
 
     // ========================================================================
@@ -533,8 +373,6 @@ public class TemplateEngine {
             }
         }
     }
-
-    public List<QueryTemplate> getAllTemplates() { return allTemplates; }
 
     private List<QueryTemplate> getDefaultTemplates() {
         QueryTemplate diag = new QueryTemplate();

@@ -75,6 +75,23 @@ public class PatternDetector {
     );
 
     // ========================================================================
+    // MULTI_CHAIN 连接词
+    // ========================================================================
+
+    /** MULTI_CHAIN 连接词（按优先级，从长到短避免部分匹配） */
+    private static final List<String> CHAIN_CONNECTORS = List.of(
+            "的并且", "中并且", "中且", "的且",   // "糖尿病患者的并且高血压的"
+            "并且", "且",                         // 纯连接词
+            "再查", "再查询"                      // 顺序链："先查X再查Y"
+    );
+
+    /** 多步链式查询中常见的表/条件词后缀 */
+    private static final List<String> CHAIN_TERM_SUFFIXES = List.of(
+            "的患者", "的病人", "的病例",
+            "的", "的检查", "的化验", "的报告"
+    );
+
+    // ========================================================================
     // TREND_COMPARE 关键词
     // ========================================================================
 
@@ -110,8 +127,9 @@ public class PatternDetector {
         DetectionResult pivotResult = detectPivot(nlQuery);
         if (pivotResult != null) return pivotResult;
 
-        // 3. MULTI_CHAIN: 多步条件链（由 LLM SemanticIR 判定）
-        // 暂不实现启发式检测，留给 LLM 输出指示
+        // 3. MULTI_CHAIN: 多步条件链（"X并且Y" / "X且Y" / "X中并且Y"）
+        DetectionResult chainResult = detectMultiChain(nlQuery);
+        if (chainResult != null) return chainResult;
 
         return new DetectionResult(Pattern.NONE, "no workflow pattern detected",
                 Collections.emptyList());
@@ -202,6 +220,71 @@ public class PatternDetector {
      */
     public boolean isPivotQuery(String nlQuery) {
         DetectionResult r = detectPivot(nlQuery);
+        return r != null;
+    }
+
+    // ========================================================================
+    // MULTI_CHAIN Detection
+    // ========================================================================
+
+    /**
+     * 检测 MULTI_CHAIN 模式：多步条件链。
+     * <p>
+     * 模式：用 "并且"/"且"/"再查" 连接多个子查询，需要逐步收窄结果集。
+     * 例如：\"糖尿病患者并且高血压患者\" → [\"糖尿病\", \"高血压\"]
+     *       \"先查糖尿病患者再查白细胞\" → [\"糖尿病\", \"白细胞\"]
+     * <p>
+     * 检测逻辑（按优先级）：
+     * <ol>
+     *   <li>先用长连接词（\"的并且\", \"中并且\"）拆分</li>
+     *   <li>再用短连接词（\"并且\", \"且\", \"再查\"）拆分</li>
+     *   <li>至少 2 段且每段非空</li>
+     * </ol>
+     */
+    DetectionResult detectMultiChain(String nlQuery) {
+        if (nlQuery == null || nlQuery.isBlank()) return null;
+
+        // 检查是否有 "先查/先查询" 前缀指示顺序链
+        boolean isOrdered = nlQuery.startsWith("先查") || nlQuery.startsWith("先查询");
+        String normalized = isOrdered
+                ? nlQuery.replaceFirst("^先查(询)?", "").trim()
+                : nlQuery;
+
+        // 尝试用连接词拆分
+        for (String connector : CHAIN_CONNECTORS) {
+            if (!normalized.contains(connector)) continue;
+
+            String[] parts = normalized.split(connector, 3); // 最多拆 3 段
+            if (parts.length < 2) continue;
+
+            List<String> segments = new ArrayList<>();
+            boolean allNonEmpty = true;
+            for (String part : parts) {
+                String trimmed = part.trim();
+                if (trimmed.isEmpty()) {
+                    allNonEmpty = false;
+                    break;
+                }
+                segments.add(trimmed);
+            }
+
+            if (!allNonEmpty || segments.size() < 2) continue;
+
+            log.info("PatternDetector: MULTI_CHAIN '{}' → {} steps: {}",
+                    connector, segments.size(), segments);
+            return new DetectionResult(Pattern.MULTI_CHAIN,
+                    "多步链式查询: " + String.join(" → ", segments),
+                    segments);
+        }
+
+        return null;
+    }
+
+    /**
+     * 检查查询是否为 MULTI_CHAIN（用于 ChatController 前置判断）。
+     */
+    public boolean isMultiChainQuery(String nlQuery) {
+        DetectionResult r = detectMultiChain(nlQuery);
         return r != null;
     }
 }

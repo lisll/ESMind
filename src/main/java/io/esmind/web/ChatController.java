@@ -113,6 +113,23 @@ public class ChatController {
             return ResponseEntity.ok(result);
         }
 
+        // 再检测 MULTI_CHAIN
+        if (patternDetector.isMultiChainQuery(question)) {
+            log.info("[chat] Routing to WorkflowEngine for MULTI_CHAIN: {}", question);
+            long wfStart = System.currentTimeMillis();
+            WorkflowEngine.WorkflowResult wfResult = workflowEngine.execute(question);
+            long wfElapsed = System.currentTimeMillis() - wfStart;
+
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("elapsed_ms", wfElapsed);
+            result.put("decision", "WORKFLOW");
+            result.put("mode", "multi_chain");
+            result.put("answer", wfResult != null && wfResult.getAnswer() != null
+                    ? wfResult.getAnswer() : "查询执行失败。");
+            result.put("confidence", 0.9);
+            return ResponseEntity.ok(result);
+        }
+
         // === Normal compile ===
         EsMindCompiler.QueryResponse response = compiler.compile(question);
 
