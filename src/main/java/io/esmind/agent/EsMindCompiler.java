@@ -149,23 +149,21 @@ public class EsMindCompiler {
                     }
                     if (buckets != null && buckets.isArray()) {
                         StringBuilder sb = new StringBuilder();
-                        // 兼容 ES 6.x (total=数字) 和 7.x+ (total={value: N})
-                        com.fasterxml.jackson.databind.JsonNode totalNode = esJson.get("hits").get("total");
-                        String totalStr = totalNode.isObject()
-                                ? totalNode.get("value").asText()
-                                : totalNode.asText();
-                        sb.append("共查询到 **").append(totalStr)
+                        // 聚合类查询：用 bucket 之和作为总数（更精确，尤其 nested 聚合）
+                        long bucketTotal = 0;
+                        for (com.fasterxml.jackson.databind.JsonNode bucket : buckets) {
+                            bucketTotal += bucket.get("doc_count").asLong();
+                        }
+                        sb.append("共查询到 **").append(bucketTotal)
                             .append("** 条记录。按时间分布如下：\n\n");
                         sb.append("| 月份 | 记录数 |\n|------|--------|\n");
-                        long totalRecords = 0;
                         for (com.fasterxml.jackson.databind.JsonNode bucket : buckets) {
                             String key = bucket.has("key_as_string") ? bucket.get("key_as_string").asText()
                                     : String.valueOf(bucket.get("key").asLong());
                             long count = bucket.get("doc_count").asLong();
                             sb.append("| ").append(key).append(" | ").append(count).append(" |\n");
-                            totalRecords += count;
                         }
-                        sb.append("| **合计** | **").append(totalRecords).append("** |\n");
+                        sb.append("| **合计** | **").append(bucketTotal).append("** |\n");
                         response.setAnswer(sb.toString());
                     }
                 }
