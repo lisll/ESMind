@@ -24,9 +24,17 @@ public class SemanticParser {
     private final String apiUrl;
     private final String apiKey;
     private final String modelName;
+    private final String fallbackApiUrl;
+    private final String fallbackApiKey;
+    private final String fallbackModelName;
     private final HttpClient httpClient;
     private final SchemaRegistry schemaRegistry;
     private final BusinessSemanticRegistry businessRegistry;
+
+    // Rate Limiter — 滑窗算法
+    private final int rateLimitMax; // 窗口内最大调用次数
+    private final long rateLimitWindowMs; // 窗口大小（毫秒）
+    private final LinkedList<Long> callTimestamps; // 最近调用时间戳
 
     private static final String SYSTEM_PROMPT =
         "你是一个医疗查询解析器。将用户的查询转为结构化JSON。\\n\\n"
@@ -107,20 +115,33 @@ public class SemanticParser {
         + "输出: {\"intent\":\"patient_extract\",\"entities\":[{\"type\":\"patient_id\",\"value\":\"白浩\"},{\"type\":\"report_type\",\"value\":\"frontpage\"},{\"type\":\"report_type\",\"value\":\"frontpage_diag\"},{\"type\":\"report_type\",\"value\":\"lab\"},{\"type\":\"report_type\",\"value\":\"outpatient\"}]}\\n";
 
     public SemanticParser(String apiUrl, String apiKey, String modelName) {
-        this(apiUrl, apiKey, modelName, null, null);
+        this(apiUrl, apiKey, modelName, null, null, null, null, null, 0, 0);
     }
 
     public SemanticParser(String apiUrl, String apiKey, String modelName, SchemaRegistry schemaRegistry) {
-        this(apiUrl, apiKey, modelName, schemaRegistry, null);
+        this(apiUrl, apiKey, modelName, schemaRegistry, null, null, null, null, 0, 0);
     }
 
     public SemanticParser(String apiUrl, String apiKey, String modelName,
                           SchemaRegistry schemaRegistry, BusinessSemanticRegistry businessRegistry) {
+        this(apiUrl, apiKey, modelName, schemaRegistry, businessRegistry, null, null, null, 0, 0);
+    }
+
+    public SemanticParser(String apiUrl, String apiKey, String modelName,
+                          SchemaRegistry schemaRegistry, BusinessSemanticRegistry businessRegistry,
+                          String fallbackApiUrl, String fallbackApiKey, String fallbackModelName,
+                          int rateLimitMax, long rateLimitWindowMs) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
         this.modelName = modelName;
         this.schemaRegistry = schemaRegistry;
         this.businessRegistry = businessRegistry;
+        this.fallbackApiUrl = fallbackApiUrl;
+        this.fallbackApiKey = fallbackApiKey;
+        this.fallbackModelName = fallbackModelName;
+        this.rateLimitMax = rateLimitMax > 0 ? rateLimitMax : 0; // 0 表示不限制
+        this.rateLimitWindowMs = rateLimitWindowMs > 0 ? rateLimitWindowMs : 60000;
+        this.callTimestamps = new LinkedList<>();
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -129,12 +150,65 @@ public class SemanticParser {
     public SemanticIR parse(String nlQuery) throws Exception {
         log.info("SemanticParser.parse: {}", nlQuery);
 
+        // 先尝试主模型（受 rate limit 保护）
+        try {
+            checkRateLimit(); // 只对主模型做 rate limit，备用模型不受限
+            String content = callModel(apiUrl, apiKey, modelName, nlQuery);
+            return parseResponse(content);
+        } catch (Exception e) {
+            log.warn("主模型调用失败: {}", e.getMessage());
+
+            // 主模型失败，尝试备用模型
+            if (fallbackApiUrl != null && !fallbackApiUrl.isEmpty()) {
+                log.info("尝试使用备用模型");
+                try {
+                    String content = callModel(fallbackApiUrl, fallbackApiKey, fallbackModelName, nlQuery);
+                    return parseResponse(content);
+                } catch (Exception e2) {
+                    log.error("备用模型也调用失败", e2);
+                    throw new RuntimeException("主模型和备用模型都调用失败", e2);
+                }
+            } else {
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * 检查是否超过了 rate limit。
+     * 滑窗算法：清理窗口外的时间戳，检查剩余次数。
+     * 注意：只对主模型做限制，备用模型不受限（因为备用模型没有 quota 问题）。
+     */
+    private void checkRateLimit() {
+        if (rateLimitMax <= 0) return;
+
+        long now = System.currentTimeMillis();
+        synchronized (callTimestamps) {
+            long cutoff = now - rateLimitWindowMs;
+            while (!callTimestamps.isEmpty() && callTimestamps.peekFirst() < cutoff) {
+                callTimestamps.removeFirst();
+            }
+
+            if (callTimestamps.size() >= rateLimitMax) {
+                long oldest = callTimestamps.peekFirst();
+                long waitMs = rateLimitWindowMs - (now - oldest);
+                log.warn("Rate limit 触发: {} 次/{}ms，还需等待 {}ms",
+                        rateLimitMax, rateLimitWindowMs, Math.max(0, waitMs));
+                throw new RuntimeException("Rate limit 已触发: 一个时间内已调用 " + callTimestamps.size()
+                        + " 次，请 " + Math.max(0, waitMs) + "ms 后再试");
+            }
+
+            callTimestamps.addLast(now);
+        }
+    }
+
+    private String callModel(String url, String key, String model, String nlQuery) throws Exception {
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(apiUrl + "/chat/completions"))
+                .uri(URI.create(url + "/chat/completions"))
                 .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + apiKey)
+                .header("Authorization", "Bearer " + key)
                 .timeout(Duration.ofSeconds(60))
-                .POST(HttpRequest.BodyPublishers.ofString(buildRequestBody(nlQuery)))
+                .POST(HttpRequest.BodyPublishers.ofString(buildRequestBody(nlQuery, model)))
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -143,12 +217,12 @@ public class SemanticParser {
         }
 
         JsonNode root = MAPPER.readTree(response.body());
-        String content = root.get("choices").get(0).get("message").get("content").asText().trim();
+        return root.get("choices").get(0).get("message").get("content").asText().trim();
+    }
 
-        // 保存 raw LLM response
+    private SemanticIR parseResponse(String content) throws Exception {
         System.setProperty("esmind.raw_llm_response", content);
 
-        // 处理可能的 markdown 代码块包裹
         if (content.startsWith("```")) {
             int start = content.indexOf('\n') + 1;
             int end = content.lastIndexOf("```");
@@ -162,10 +236,10 @@ public class SemanticParser {
         return ir;
     }
 
-    private String buildRequestBody(String userMsg) {
+    private String buildRequestBody(String userMsg, String modelNameOverride) {
         try {
             com.fasterxml.jackson.databind.node.ObjectNode body = MAPPER.createObjectNode();
-            body.put("model", modelName);
+            body.put("model", modelNameOverride != null ? modelNameOverride : modelName);
             body.put("temperature", 0.1);
             body.put("max_tokens", 500);
 
@@ -173,7 +247,6 @@ public class SemanticParser {
             com.fasterxml.jackson.databind.node.ObjectNode sysMsg = messages.addObject();
             sysMsg.put("role", "system");
 
-            // 动态注入 schema（可选）
             String prompt = SYSTEM_PROMPT;
             if (schemaRegistry != null) {
                 String schemaStr = buildSchemaSection();
@@ -191,6 +264,10 @@ public class SemanticParser {
         } catch (Exception e) {
             throw new RuntimeException("Failed to build LLM request", e);
         }
+    }
+
+    private String buildRequestBody(String userMsg) {
+        return buildRequestBody(userMsg, null);
     }
 
     /**

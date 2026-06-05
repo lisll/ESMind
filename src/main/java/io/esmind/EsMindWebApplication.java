@@ -54,6 +54,9 @@ public class EsMindWebApplication {
     static final String PROP_BASE_URL = "esmind.model.base-url";
     static final String PROP_API_KEY = "esmind.model.api-key";
     static final String PROP_MODEL = "esmind.model.name";
+    static final String PROP_FALLBACK_BASE_URL = "esmind.model.fallback.base-url";
+    static final String PROP_FALLBACK_API_KEY = "esmind.model.fallback.api-key";
+    static final String PROP_FALLBACK_MODEL = "esmind.model.fallback.name";
     static final String PROP_ES_HOST = "esmind.es.host";
     static final String PROP_ES_PORT = "esmind.es.port";
     static final String PROP_ES_SCHEME = "esmind.es.scheme";
@@ -61,6 +64,7 @@ public class EsMindWebApplication {
     static final String PROP_CACHE_PATH = "esmind.schema.cache-path";
 
     static final String ENV_API_KEY = "DASHSCOPE_API_KEY";
+    static final String ENV_FALLBACK_API_KEY = "DEEPSEEK_API_KEY";
     static final String ENV_ES_HOST = "ES_HOST";
     static final String ENV_ES_PORT = "ES_PORT";
 
@@ -128,10 +132,21 @@ public class EsMindWebApplication {
             String baseUrl = props.getProperty(PROP_BASE_URL, DEFAULT_BASE_URL);
             String apiKey = resolveSecret(props.getProperty(PROP_API_KEY, ""), ENV_API_KEY);
             String modelName = props.getProperty(PROP_MODEL, DEFAULT_MODEL);
-            log.info("SemanticParser initialized: model={} @ {} (schema={}, business={})",
-                    modelName, baseUrl, schemaRegistry != null ? schemaRegistry.size() + " fields" : "none",
-                    businessSemanticRegistry != null ? businessSemanticRegistry.size() + " tables" : "none");
-            return new SemanticParser(baseUrl, apiKey, modelName, schemaRegistry, businessSemanticRegistry);
+            
+            String fallbackBaseUrl = props.getProperty(PROP_FALLBACK_BASE_URL);
+            String fallbackApiKey = resolveSecret(props.getProperty(PROP_FALLBACK_API_KEY, ""), ENV_FALLBACK_API_KEY);
+            String fallbackModelName = props.getProperty(PROP_FALLBACK_MODEL);
+            
+            int rateLimitMax = Integer.parseInt(props.getProperty("esmind.ratelimit.max", "100"));
+            long rateLimitWindowMs = Long.parseLong(props.getProperty("esmind.ratelimit.window-ms", "300000"));
+            
+            log.info("SemanticParser initialized: model={} @ {} (fallback: model={} @ {}, ratelimit: {}次/{}ms)",
+                    modelName, baseUrl, fallbackModelName, fallbackBaseUrl != null ? fallbackBaseUrl : "N/A",
+                    rateLimitMax, rateLimitWindowMs);
+            
+            return new SemanticParser(baseUrl, apiKey, modelName, schemaRegistry, businessSemanticRegistry,
+                    fallbackBaseUrl, fallbackApiKey, fallbackModelName,
+                    rateLimitMax, rateLimitWindowMs);
         }
 
         @Bean
@@ -296,12 +311,35 @@ public class EsMindWebApplication {
     }
 
     static String resolveSecret(String fileValue, String... envNames) {
+        // 如果 fileValue 是 ${XXX} 格式，也尝试解析
+        String valueToCheck = fileValue;
+        if (fileValue != null && fileValue.startsWith("${") && fileValue.endsWith("}")) {
+            String envName = fileValue.substring(2, fileValue.length() - 1);
+            String envValue = System.getenv(envName);
+            if (envValue != null && !envValue.isBlank()) {
+                valueToCheck = envValue;
+            }
+        }
         for (String envName : envNames) {
             String envValue = System.getenv(envName);
             if (envValue != null && !envValue.isBlank()) {
                 return envValue;
             }
         }
-        return fileValue;
+        return valueToCheck;
+    }
+
+    /**
+     * 解析可能的 ${XXX} 占位符，从环境变量取值。
+     */
+    static String resolvePlaceholder(String value) {
+        if (value != null && value.startsWith("${") && value.endsWith("}")) {
+            String envName = value.substring(2, value.length() - 1);
+            String envValue = System.getenv(envName);
+            if (envValue != null && !envValue.isBlank()) {
+                return envValue;
+            }
+        }
+        return value;
     }
 }
