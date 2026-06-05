@@ -111,6 +111,48 @@ public class EsRestClient implements AutoCloseable {
         return batchCount(indexName, types);
     }
 
+    /**
+     * 批量查询多个字段的存在文档数（用于计算填充率）。
+     * 返回 Map<字段名, 文档数>
+     */
+    public Map<String, Long> batchCountFieldExists(String indexName, Collection<String> fieldNames) throws Exception {
+        if (fieldNames == null || fieldNames.isEmpty()) return Collections.emptyMap();
+
+        List<String> names = new ArrayList<>(fieldNames);
+        StringBuilder body = new StringBuilder();
+        for (String field : names) {
+            // 对于嵌套字段，需要检查该字段是否属于某个 nested 表
+            // 暂时简化：先统一用 exists 查询，后面再优化
+            body.append("{}\n");
+            body.append("{\"size\":0,\"query\":{\"exists\":{\"field\":\"").append(field).append("\"}}}\n");
+        }
+
+        Request req = new Request("POST", "/" + indexName + "/_msearch");
+        req.setJsonEntity(body.toString());
+        req.addParameter("filter_path", "responses.status,responses.hits.total");
+
+        JsonNode root = parseBody(client.performRequest(req));
+        Map<String, Long> result = new LinkedHashMap<>();
+        JsonNode responses = root.get("responses");
+        if (responses != null && responses.isArray()) {
+            int i = 0;
+            for (JsonNode resp : responses) {
+                String field = names.get(i);
+                int status = resp.get("status").asInt();
+                if (status == 200 && resp.has("hits")) {
+                    JsonNode total = resp.get("hits").get("total");
+                    // ES 6.x: total is number; ES 7.x+: total is {value:N, relation:"eq"}
+                    long count = total.isObject() ? total.get("value").asLong() : total.asLong();
+                    result.put(field, count);
+                } else {
+                    result.put(field, -1L);
+                }
+                i++;
+            }
+        }
+        return result;
+    }
+
     private static JsonNode parseBody(Response resp) throws Exception {
         try (InputStream is = resp.getEntity().getContent()) {
             return MAPPER.readTree(is);

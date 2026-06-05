@@ -341,10 +341,33 @@ public class TemplateEngine {
             return entity;
         }
 
-        // 4. 兜底：全文搜索
+        // 4. 兜底：优先选择填充率高的字段，实在不行才用 total_src
+        String bestField = "total_src";
+        if (schemaRegistry != null) {
+            Double bestRate = null;
+            // 遍历所有字段，找到填充率最高的、可搜索的字段
+            for (io.esmind.compiler.SchemaField f : schemaRegistry.getAllFields()) {
+                // 跳过 nested/object 类型的字段本身，只看具体数据字段
+                if ("nested".equals(f.getType()) || "object".equals(f.getType())) continue;
+                // 优先选择有 keyword 子字段的，或者类型是 keyword/text/date/numeric 的
+                boolean isSearchable = f.getKeywordField() != null
+                        || "keyword".equals(f.getType())
+                        || "text".equals(f.getType())
+                        || "date".equals(f.getType())
+                        || f.isNumeric();
+                if (isSearchable && f.getFillRate() != null) {
+                    if (bestRate == null || f.getFillRate() > bestRate) {
+                        bestRate = f.getFillRate();
+                        // 优先用 keyword 字段做 match_phrase，或者原字段
+                        bestField = f.getKeywordField() != null ? f.getKeywordField() : f.getFieldName();
+                    }
+                }
+            }
+            log.info("Fallback field selection: {} (fill rate: {})", bestField, bestRate);
+        }
         entity.setClauseType("match_phrase");
-        entity.setField("total_src");
-        log.warn("No template for type '{}', fallback to total_src match_phrase", type);
+        entity.setField(bestField);
+        log.warn("No template for type '{}', fallback to {} match_phrase", type, bestField);
         return entity;
     }
 

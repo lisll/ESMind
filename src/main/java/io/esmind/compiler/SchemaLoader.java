@@ -51,6 +51,34 @@ public class SchemaLoader {
 
         registry.registerAll(fields);
 
+        // === 新增：计算字段填充率 ===
+        try {
+            log.info("Calculating field fill rates (this may take a while)...");
+            long totalDocs = esClient.simpleCount(indexName);
+            registry.setTotalDocCount(totalDocs);
+            log.info("Total documents: {}", totalDocs);
+
+            // 只计算非 nested/object 类型的字段的填充率，避免太多查询
+            List<String> dataFields = new ArrayList<>();
+            for (SchemaField f : fields) {
+                if (!"nested".equals(f.getType()) && !"object".equals(f.getType())) {
+                    dataFields.add(f.getFieldName());
+                }
+            }
+
+            // 分批查询，避免一次查询太多字段
+            int batchSize = 50;
+            for (int i = 0; i < dataFields.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, dataFields.size());
+                List<String> batch = dataFields.subList(i, end);
+                Map<String, Long> docCounts = esClient.batchCountFieldExists(indexName, batch);
+                registry.updateFillRates(docCounts);
+                log.info("Processed batch {}/{} ({} fields)", (i / batchSize) + 1, (dataFields.size() + batchSize - 1) / batchSize, batch.size());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to calculate fill rates: {}", e.getMessage(), e);
+        }
+
         // 写缓存
         try { registry.saveToCache(); }
         catch (Exception e) { log.warn("Failed to save schema cache: {}", e.getMessage()); }

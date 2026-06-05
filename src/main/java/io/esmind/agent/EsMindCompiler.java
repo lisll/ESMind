@@ -261,6 +261,7 @@ public class EsMindCompiler {
     // Getter for debug endpoints
     public SemanticParser getSemanticParser() { return semanticParser; }
     public TemplateEngine getTemplateEngine() { return templateEngine; }
+    public SchemaRegistry getSchemaRegistry() { return schemaRegistry; }
 
     // ===== Response =====
 

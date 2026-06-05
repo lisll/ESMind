@@ -19,7 +19,17 @@ import java.util.List;
 public class SemanticIR {
 
     /** IR schema 版本号。Entity 编译字段变更时 +1 */
-    public static final int CURRENT_VERSION = 3;
+    public static final int CURRENT_VERSION = 4;
+
+    /** 查询意图枚举 */
+    public enum QueryIntent {
+        PATIENT_SEARCH,    // 患者搜索（默认）
+        PATIENT_COUNT,     // 患者计数
+        PATIENT_EXTRACT,   // 患者数据提取（单个患者多份报告）
+        RESEARCH_EXTRACT,  // 科研数据提取
+        AGGREGATION,       // 聚合查询
+        TREND_ANALYSIS     // 趋势分析
+    }
 
     private int version = CURRENT_VERSION;
 
@@ -56,6 +66,22 @@ public class SemanticIR {
 
     public int getLimit() { return limit; }
     public void setLimit(int limit) { this.limit = limit; }
+
+    /** 获取查询意图枚举，如果 intent 字符串无法解析则返回 PATIENT_SEARCH */
+    public QueryIntent getQueryIntent() {
+        if (intent == null || intent.isBlank()) {
+            return QueryIntent.PATIENT_SEARCH;
+        }
+        try {
+            return QueryIntent.valueOf(intent.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            // 兼容旧的 intent 值
+            if ("patient_count".equalsIgnoreCase(intent)) {
+                return QueryIntent.PATIENT_COUNT;
+            }
+            return QueryIntent.PATIENT_SEARCH;
+        }
+    }
 
     // ========================================================================
     // Entity — 原子查询条件

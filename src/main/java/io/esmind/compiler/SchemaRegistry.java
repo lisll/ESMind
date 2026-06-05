@@ -21,7 +21,7 @@ public class SchemaRegistry {
     private static final ObjectMapper MAPPER = new ObjectMapper()
             .enable(SerializationFeature.INDENT_OUTPUT);
     /** Schema 版本标识 */
-    private static final String SCHEMA_VERSION = "1.0.0";
+    private static final String SCHEMA_VERSION = "1.1.0";  // 更新版本号，因为增加了填充率字段
 
     private final String indexName;
     private final String cacheFilePath;
@@ -34,6 +34,9 @@ public class SchemaRegistry {
     private final Map<String, List<SchemaField>> fieldsByType = new ConcurrentHashMap<>();
     /** nestedPath → 该表下的 SchemaField 列表 */
     private final Map<String, List<SchemaField>> fieldsByNestedPath = new ConcurrentHashMap<>();
+
+    // === 新增：总文档数 ===
+    private Long totalDocCount = null;
 
     public SchemaRegistry(String indexName, String cacheFilePath) {
         this.indexName = indexName;
@@ -126,6 +129,36 @@ public class SchemaRegistry {
     public String getIndexName() { return indexName; }
     public int size() { return fieldsByName.size(); }
 
+    // === 新增：总文档数的 getter/setter ===
+    public Long getTotalDocCount() { return totalDocCount; }
+    public void setTotalDocCount(Long v) { this.totalDocCount = v; }
+
+    /**
+     * 批量更新字段的填充率。
+     * docCounts: Map<字段名, 包含该字段的文档数>
+     */
+    public void updateFillRates(Map<String, Long> docCounts) {
+        if (docCounts == null || docCounts.isEmpty()) return;
+        if (totalDocCount == null) {
+            log.warn("totalDocCount not set, cannot calculate fill rates");
+            return;
+        }
+
+        int updated = 0;
+        for (Map.Entry<String, Long> entry : docCounts.entrySet()) {
+            String fieldName = entry.getKey();
+            Long docCount = entry.getValue();
+            SchemaField field = fieldsByName.get(fieldName);
+            if (field != null && docCount != null && docCount >= 0) {
+                field.setDocCount(docCount);
+                double rate = totalDocCount > 0 ? (double) docCount / totalDocCount : 0.0;
+                field.setFillRate(rate);
+                updated++;
+            }
+        }
+        log.info("Updated fill rates for {} fields", updated);
+    }
+
     /** 获取所有顶层业务表的名称列表 */
     public List<String> getTopLevelTableNames() {
         List<String> result = new ArrayList<>();
@@ -211,11 +244,19 @@ public class SchemaRegistry {
 
     // ===== 缓存 =====
 
+    static class CacheData {
+        public String version;
+        public String indexName;
+        public List<SchemaField> fields;
+        public Long totalDocCount;
+    }
+
     public void saveToCache() throws Exception {
         CacheData data = new CacheData();
         data.version = SCHEMA_VERSION;
         data.indexName = indexName;
         data.fields = new ArrayList<>(fieldsByName.values());
+        data.totalDocCount = totalDocCount;
         File f = new File(cacheFilePath);
         f.getParentFile().mkdirs();
         MAPPER.writeValue(f, data);
@@ -228,13 +269,8 @@ public class SchemaRegistry {
         CacheData data = MAPPER.readValue(f, CacheData.class);
         if (!SCHEMA_VERSION.equals(data.version)) return false;
         registerAll(data.fields);
+        this.totalDocCount = data.totalDocCount;
         log.info("Schema cache loaded: {} ({} fields)", cacheFilePath, data.fields.size());
         return true;
-    }
-
-    static class CacheData {
-        public String version;
-        public String indexName;
-        public List<SchemaField> fields;
     }
 }

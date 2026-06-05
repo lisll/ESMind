@@ -3,6 +3,7 @@ package io.esmind.web;
 import io.esmind.agent.ConfidenceGate;
 import io.esmind.agent.EsMindCompiler;
 import io.esmind.agent.MedicalQueryAgent;
+import io.esmind.compiler.QueryPlanner;
 import io.esmind.semantic.SemanticIR;
 import io.esmind.workflow.PatternDetector;
 import io.esmind.workflow.WorkflowEngine;
@@ -29,16 +30,19 @@ public class ChatController {
     private final MedicalQueryAgent agent;
     private final WorkflowEngine workflowEngine;
     private final PatternDetector patternDetector;
+    private final QueryPlanner queryPlanner;
 
     public ChatController(EsMindCompiler esMindCompiler,
                           MedicalQueryAgent medicalQueryAgent,
-                          WorkflowEngine workflowEngine) {
+                          WorkflowEngine workflowEngine,
+                          QueryPlanner queryPlanner) {
         this.compiler = esMindCompiler;
         this.confidenceGate = new ConfidenceGate();
         this.agent = medicalQueryAgent;
         this.workflowEngine = workflowEngine;
         this.patternDetector = new PatternDetector();
-        log.info("ChatController initialized with v2 Compiler + ConfidenceGate + WorkflowEngine: index={}",
+        this.queryPlanner = queryPlanner;
+        log.info("ChatController initialized with v2 Compiler + ConfidenceGate + WorkflowEngine + QueryPlanner: index={}",
                 esMindCompiler != null ? "configured" : "?");
     }
 
@@ -56,6 +60,9 @@ public class ChatController {
 
         log.info("[chat] User question: {}", question);
 
+        QueryPlanner.Plan plan = null;
+        SemanticIR ir = null;
+
         // === Phase 0: Confidence Gate (PRE) ===
         ConfidenceGate.Result preResult = confidenceGate.evaluatePre(question);
         if (preResult.isRejected()) {
@@ -65,6 +72,8 @@ public class ChatController {
             result.put("confidence", 0.0);
             result.put("decision", "REJECTED");
             result.put("elapsed_ms", 0);
+            result.put("plan_type", "N/A");
+            result.put("plan_reason", "ConfidenceGate rejected before parsing");
             return ResponseEntity.ok(result);
         }
 
@@ -75,6 +84,8 @@ public class ChatController {
             result.put("confidence", 1.0);
             result.put("decision", "GREETING");
             result.put("elapsed_ms", 0);
+            result.put("plan_type", "N/A");
+            result.put("plan_reason", "Greeting query");
             return ResponseEntity.ok(result);
         }
 
@@ -91,8 +102,10 @@ public class ChatController {
             result.put("decision", "WORKFLOW");
             result.put("mode", "trend_compare");
             result.put("answer", wfResult != null && wfResult.getAnswer() != null
-                    ? wfResult.getAnswer() : "查询执行失败。");
+                    ? wfResult.getAnswer() : "查询失败。");
             result.put("confidence", 0.9);
+            result.put("plan_type", "TASK");
+            result.put("plan_reason", "Trend compare query");
             return ResponseEntity.ok(result);
         }
 
@@ -108,8 +121,10 @@ public class ChatController {
             result.put("decision", "WORKFLOW");
             result.put("mode", "pivot");
             result.put("answer", wfResult != null && wfResult.getAnswer() != null
-                    ? wfResult.getAnswer() : "查询执行失败。");
+                    ? wfResult.getAnswer() : "查询失败。");
             result.put("confidence", 0.9);
+            result.put("plan_type", "TASK");
+            result.put("plan_reason", "Pivot query");
             return ResponseEntity.ok(result);
         }
 
@@ -125,9 +140,41 @@ public class ChatController {
             result.put("decision", "WORKFLOW");
             result.put("mode", "multi_chain");
             result.put("answer", wfResult != null && wfResult.getAnswer() != null
-                    ? wfResult.getAnswer() : "查询执行失败。");
+                    ? wfResult.getAnswer() : "查询失败。");
             result.put("confidence", 0.9);
+            result.put("plan_type", "TASK");
+            result.put("plan_reason", "Multi-chain query");
             return ResponseEntity.ok(result);
+        }
+
+        // === 现在使用 QueryPlanner 评估并路由 ===
+        log.info("[chat] Using QueryPlanner to evaluate: {}", question);
+        try {
+            ir = compiler.getSemanticParser().parse(question);
+            ir = compiler.getTemplateEngine().resolve(ir);
+            plan = queryPlanner.evaluate(ir);
+            log.info("[chat] QueryPlanner plan: type={}, reason={}", plan.getType(), plan.getReason());
+        } catch (Exception e) {
+            log.warn("[chat] Failed to parse IR for QueryPlanner: {}", e.getMessage());
+            // 解析失败，plan 保持 null，后面会显示 N/A
+        }
+
+        // 根据 PlanType 路由
+        if (plan != null) {
+            switch (plan.getType()) {
+                case SINGLE:
+                    // 单一 DSL，走正常编译路径
+                    log.info("[chat] Plan is SINGLE, using normal compiler path");
+                    break;
+                case COMPLEX:
+                    // Complex Query Engine（科研取数等）已实现，通过独立 API /api/research/extract 调用
+                    log.info("[chat] Plan is COMPLEX (Complex Query Engine available via /api/research/extract), falling back to normal compiler");
+                    break;
+                case TASK:
+                    // 已经通过上面的 Workflow 检测处理了
+                    log.info("[chat] Plan is TASK, but should have been handled by WorkflowEngine already");
+                    break;
+            }
         }
 
         // === Normal compile ===
@@ -139,6 +186,8 @@ public class ChatController {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("elapsed_ms", response.getTotalElapsedMs());
         result.put("confidence", postResult.getConfidence());
+        result.put("plan_type", plan != null ? plan.getType().name() : "N/A");
+        result.put("plan_reason", plan != null ? plan.getReason() : "N/A");
 
         if (postResult.isRejected()) {
             result.put("decision", "REJECTED");
@@ -200,6 +249,20 @@ public class ChatController {
             return ResponseEntity.ok(result);
         }
 
+        // === 使用 QueryPlanner 评估（即使是 detail 接口） ===
+        log.info("[chat/detail] Using QueryPlanner to evaluate: {}", question);
+        SemanticIR ir = null;
+        QueryPlanner.Plan plan = null;
+        try {
+            ir = compiler.getSemanticParser().parse(question);
+            ir = compiler.getTemplateEngine().resolve(ir);
+            plan = queryPlanner.evaluate(ir);
+            log.info("[chat/detail] QueryPlanner plan: type={}, reason={}", plan.getType(), plan.getReason());
+        } catch (Exception e) {
+            log.warn("[chat/detail] Failed to parse IR for QueryPlanner: {}", e.getMessage());
+            // 解析失败，plan 为 null，后面会显示 N/A
+        }
+
         // === Normal compile ===
         EsMindCompiler.QueryResponse response = compiler.compile(question);
 
@@ -209,6 +272,8 @@ public class ChatController {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("elapsed_ms", response.getTotalElapsedMs());
         result.put("confidence", postResult.getConfidence());
+        result.put("plan_type", plan != null ? plan.getType().name() : "N/A");
+        result.put("plan_reason", plan != null ? plan.getReason() : "N/A");
 
         // 全部先扔进去，后面根据 decision 决定展示哪些
         result.put("dsl", response.getDsl() != null ? response.getDsl() : "");

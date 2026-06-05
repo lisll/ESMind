@@ -21,6 +21,12 @@ public class SchemaField {
     private boolean numeric;
     private boolean aggregatable;
 
+    // === 新增：字段填充率统计 ===
+    private Long docCount;          // 包含该字段的文档数
+    private Long valueCount;        // 该字段的非空值数量（对于多值字段可能大于 docCount）
+    private Double fillRate;        // 填充率 = docCount / 总文档数（0.0 到 1.0）
+    private Boolean searchable;     // 是否可搜索（暂时留空，未来可能用）
+
     public SchemaField() {}
 
     public SchemaField(String fieldName, List<String> bizNames, String esPath,
@@ -68,6 +74,19 @@ public class SchemaField {
 
     public boolean isAggregatable() { return aggregatable; }
     public void setAggregatable(boolean v) { this.aggregatable = v; }
+
+    // === 新增：填充率相关的 getter/setter ===
+    public Long getDocCount() { return docCount; }
+    public void setDocCount(Long v) { this.docCount = v; }
+
+    public Long getValueCount() { return valueCount; }
+    public void setValueCount(Long v) { this.valueCount = v; }
+
+    public Double getFillRate() { return fillRate; }
+    public void setFillRate(Double v) { this.fillRate = v; }
+
+    public Boolean isSearchable() { return searchable; }
+    public void setSearchable(Boolean v) { this.searchable = v; }
 
     public boolean isNested() { return "nested".equals(type); }
 
